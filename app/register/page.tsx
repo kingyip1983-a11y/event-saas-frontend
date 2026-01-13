@@ -3,7 +3,7 @@
 import { useState } from 'react';
 
 // 👇 如果是在內網測試 (iPad)，請改成您的 Mac IP
-const BACKEND_URL = 'http://192.168.0.182:4000'; 
+const BACKEND_URL = "https://event-saas-backend-production.up.railway.app";
 
 
 export default function Register() {

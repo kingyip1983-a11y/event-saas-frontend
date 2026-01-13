@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react';
 
 // 👇 請確認 IP
-const BACKEND_URL = 'http://192.168.0.182:4000';
+const BACKEND_URL = "https://event-saas-backend-production.up.railway.app";
 
 interface Photo {
   id: number;
