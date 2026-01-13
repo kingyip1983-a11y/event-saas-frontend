@@ -3,7 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 
 // 👇 請確認 IP 正確
-const BACKEND_URL = 'http://192.168.0.182:4000';
+const BACKEND_URL = "https://event-saas-backend-production.up.railway.app";
 const socket = io(BACKEND_URL);
 
 // 1. 定義資料型別
