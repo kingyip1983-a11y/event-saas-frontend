@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react';
 
 // 👇 請確認 IP
-const BACKEND_URL = "https://event-saas-backend-production.up.railway.app";
+const BACKEND_URL = "https://event-saas-backend-production.up.railway.app";//forece update
 
 interface Photo {
   id: number;
