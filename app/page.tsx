@@ -1,412 +1,211 @@
-const express = require('express');
-const multer = require('multer');
-const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
-const { PrismaClient } = require('@prisma/client');
-const { Server } = require("socket.io");
-const http = require('http');
-const cors = require('cors');
-const sharp = require('sharp');
-const axios = require('axios');
-const FormData = require('form-data');
-const path = require('path');
-const fs = require('fs');
+'use client';
+import { useState, useEffect, useRef } from 'react';
+import { io } from 'socket.io-client';
 
-// 🔥 新引擎引入 (取代 whatsapp-web.js)
-const { 
-    default: makeWASocket, 
-    DisconnectReason, 
-    useMultiFileAuthState 
-} = require('@whiskeysockets/baileys');
-const pino = require('pino');
-const QRCode = require('qrcode'); // 用來產生圖片給前端
+// 👇 請確認這是你 Railway 後端的正確網址 (必須是 https)
+const BACKEND_URL = "https://event-saas-backend-production.up.railway.app";
+const socket = io(BACKEND_URL);
 
-require('dotenv').config();
+// 資料型別定義
+interface Person { id: number; name: string; }
+interface Face { id: number; boundingBox: number[]; confidence: number; person?: Person; }
+interface Photo { id: number; url: string; originalUrl?: string; status: string; faces: Face[]; }
 
-const app = express();
-const prisma = new PrismaClient();
+// --------------------------------------------------------
+// PhotoCard 組件
+// --------------------------------------------------------
+const PhotoCard = ({ photo, viewMode, onNameFace, onSearchPerson, onConfirmDelete }: any) => {
+  const [imgSize, setImgSize] = useState({ width: 0, height: 0 });
+  const imgRef = useRef<HTMLImageElement>(null);
 
-// ✅ 讓 Railway 決定 Port
-const port = process.env.PORT || 8000;
-
-// -----------------------------------------
-// 🟢 中介軟體設定 (CORS & JSON)
-// -----------------------------------------
-// 解決手機連線失敗的關鍵：允許跨域請求
-app.use(cors({
-    origin: '*', // 允許所有來源 (包含你的手機)
-    methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-}));
-
-app.use(express.json());
-
-// 開放 uploads 資料夾 (以防需要讀取本地檔案)
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
-const server = http.createServer(app);
-const io = new Server(server, { 
-    cors: { 
-        origin: "*",
-        methods: ["GET", "POST"]
-    } 
-});
-
-const upload = multer({ storage: multer.memoryStorage() });
-
-// AWS S3 設定
-const s3 = new S3Client({
-  region: process.env.AWS_REGION,
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-  },
-});
-
-// -----------------------------------------
-// 🟢 WhatsApp 初始化 (Baileys SaaS 核心)
-// -----------------------------------------
-console.log("🔄 正在啟動 WhatsApp 客戶端 (SaaS Engine)...");
-
-let sock;
-let qrCodeDataUrl = null;
-let isWhatsappReady = false;
-
-async function connectToWhatsApp() {
-    // 設定 Session 儲存 (讓連線持久化)
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-
-    sock = makeWASocket({
-        auth: state,
-        printQRInTerminal: true, // 在 Log 印出文字版 QR
-        logger: pino({ level: 'silent' }), // 隱藏雜訊
-        browser: ["Event SaaS", "Chrome", "1.0.0"],
-    });
-
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
-
-        // A. 產生 QR Code
-        if (qr) {
-            console.log('🚨 新的 QR Code 產生中...');
-            qrCodeDataUrl = await QRCode.toDataURL(qr);
-            io.emit('wa_qr', qrCodeDataUrl);
-            isWhatsappReady = false;
-        }
-
-        // B. 連線成功
-        if (connection === 'open') {
-            console.log('✅ WhatsApp 已連線！(Ready)');
-            qrCodeDataUrl = null;
-            isWhatsappReady = true;
-            io.emit('wa_ready', true);
-        }
-
-        // C. 斷線重連
-        if (connection === 'close') {
-            const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('❌ 連線中斷，嘗試重連:', shouldReconnect);
-            if (shouldReconnect) {
-                connectToWhatsApp();
-            }
-        }
-    });
-
-    sock.ev.on('creds.update', saveCreds);
-}
-
-// 啟動連線
-connectToWhatsApp();
-
-// -----------------------------------------
-// 🌐 路由: 現場掃描頁面 (秒開版)
-// -----------------------------------------
-app.get('/connect', (req, res) => {
-    if (isWhatsappReady) {
-        return res.send('<h1 style="color:green; text-align:center; margin-top:50px;">✅ WhatsApp 已連線成功！</h1>');
+  useEffect(() => {
+    if (imgRef.current?.complete) {
+       setImgSize({ width: imgRef.current.naturalWidth, height: imgRef.current.naturalHeight });
     }
-    if (!qrCodeDataUrl) {
-        return res.send('<h1 style="text-align:center; margin-top:50px;">🔄 系統初始化中...<br>(請稍候 3 秒)</h1><script>setTimeout(()=>location.reload(), 3000)</script>');
+  }, []); 
+
+  return (
+    <div className="bg-white rounded-xl shadow-md overflow-hidden relative group">
+      {/* 標籤 */}
+      <div className="absolute top-2 left-2 z-20 bg-black/40 text-white text-[10px] px-1.5 py-0.5 rounded backdrop-blur-sm">
+          {viewMode === 'original' ? 'RAW' : 'FRAME'}
+      </div>
+
+      <img 
+        ref={imgRef}
+        src={viewMode === 'original' && photo.originalUrl ? photo.originalUrl : photo.url}
+        className="w-full h-auto block"
+        onLoad={(e) => setImgSize({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })}
+      />
+      
+      {/* 人臉框 */}
+      {imgSize.width > 0 && photo.faces?.map((face: Face, idx: number) => {
+        const [x1, y1, x2, y2] = face.boundingBox;
+        return (
+          <div
+            key={idx}
+            className="absolute border-2 border-green-400 z-10 cursor-pointer hover:border-blue-400"
+            style={{
+              left: `${(x1 / imgSize.width) * 100}%`,
+              top: `${(y1 / imgSize.height) * 100}%`,
+              width: `${((x2 - x1) / imgSize.width) * 100}%`,
+              height: `${((y2 - y1) / imgSize.height) * 100}%`,
+            }}
+            onClick={(e) => { e.stopPropagation(); onNameFace(face.id, face.person?.name); }}
+          >
+            {face.person && (
+              <div className="absolute -top-6 left-0 bg-blue-600 text-white text-[10px] px-2 py-0.5 rounded">
+                🔍 {face.person.name}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* 刪除按鈕 */}
+      <button 
+        onClick={(e) => { e.stopPropagation(); onConfirmDelete(photo.id); }}
+        className="absolute top-2 right-2 bg-red-600 text-white p-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity z-30"
+      >
+        🗑️
+      </button>
+    </div>
+  );
+};
+
+// --------------------------------------------------------
+// 主程式 Home
+// --------------------------------------------------------
+export default function Home() {
+  const [uploading, setUploading] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const [photos, setPhotos] = useState<Photo[]>([]);
+  const [isSearchResult, setIsSearchResult] = useState(false);
+  const [viewMode, setViewMode] = useState<'framed' | 'original'>('framed');
+  const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
+
+  const loadAllPhotos = () => {
+    setIsSearchResult(false);
+    fetch(`${BACKEND_URL}/photos`)
+      .then(res => res.json())
+      .then(data => Array.isArray(data) && setPhotos(data))
+      .catch(console.error);
+  };
+
+  useEffect(() => { loadAllPhotos(); }, []);
+
+  useEffect(() => {
+    socket.on('new_photo_ready', (newPhoto: Photo) => {
+      if (!isSearchResult) setPhotos(prev => [newPhoto, ...prev]);
+    });
+    socket.on('photo_deleted', (id: number) => setPhotos(prev => prev.filter(p => p.id !== id)));
+    return () => { socket.off('new_photo_ready'); socket.off('photo_deleted'); };
+  }, [isSearchResult]);
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.length) return;
+    setUploading(true);
+    for (let i = 0; i < e.target.files.length; i++) {
+        const formData = new FormData();
+        formData.append('photo', e.target.files[i]);
+        await fetch(`${BACKEND_URL}/upload`, { method: 'POST', body: formData }).catch(console.error);
     }
-    res.send(`
-        <div style="text-align:center; padding-top:50px; font-family:sans-serif;">
-            <h1>請使用 WhatsApp 掃描</h1>
-            <img src="${qrCodeDataUrl}" style="border:5px solid #333; width:300px;" />
-            <p>QR Code 自動刷新中...</p>
+    setUploading(false);
+    if (!isSearchResult) loadAllPhotos();
+    e.target.value = ''; 
+  };
+
+  // 🔥 關鍵修正：自拍搜尋 🔥
+  const handleSearch = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.[0]) return;
+    setSearching(true);
+    const formData = new FormData();
+    formData.append('selfie', e.target.files[0]);
+
+    try {
+      // ✅ 這裡必須是 /guest-search
+      const res = await fetch(`${BACKEND_URL}/guest-search`, { method: 'POST', body: formData });
+      const results = await res.json();
+      
+      if (res.ok && Array.isArray(results)) {
+        setPhotos(results);
+        setIsSearchResult(true);
+      } else { 
+        alert(results.error || '搜尋發生錯誤'); 
+      }
+    } catch (error: any) { 
+        // ✅ 顯示詳細錯誤，不再只有「搜尋連線失敗」
+        alert(`連線失敗: ${error.message || JSON.stringify(error)}`); 
+    } finally { 
+        setSearching(false); 
+        e.target.value = ''; 
+    }
+  };
+
+  // 刪除與命名功能
+  const executeDelete = async () => {
+    if (deleteTargetId) await fetch(`${BACKEND_URL}/photo/${deleteTargetId}`, { method: 'DELETE' });
+    setDeleteTargetId(null);
+  };
+  const handleNameFace = async (faceId: number, name?: string) => {
+    const newName = prompt("輸入名字", name || "");
+    if (newName && newName !== name) {
+      await fetch(`${BACKEND_URL}/name`, { 
+        method: 'POST', 
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ faceId, name: newName }) 
+      });
+      loadAllPhotos();
+    }
+  };
+
+  return (
+    <main className="min-h-screen bg-slate-50 p-6">
+      <div className="max-w-7xl mx-auto">
+        {/* 標題與按鈕區 */}
+        <div className="flex flex-col md:flex-row justify-between items-center mb-8 bg-white p-4 rounded-xl shadow-sm">
+          <h1 className="text-2xl font-bold text-slate-800 cursor-pointer" onClick={loadAllPhotos}>Event AI Pro</h1>
+          
+          <div className="flex gap-2 mt-4 md:mt-0">
+             {/* 視角切換 */}
+             <div className="flex bg-slate-100 p-1 rounded-lg mr-4">
+                <button onClick={() => setViewMode('original')} className={`px-3 py-1 text-xs font-bold rounded ${viewMode==='original'?'bg-white shadow':''}`}>原圖</button>
+                <button onClick={() => setViewMode('framed')} className={`px-3 py-1 text-xs font-bold rounded ${viewMode==='framed'?'bg-white shadow':''}`}>合成</button>
+            </div>
+
+            {/* 自拍搜尋按鈕 */}
+            <label className={`cursor-pointer px-4 py-2 rounded-lg text-white font-bold ${searching ? 'bg-purple-400' : 'bg-purple-600'}`}>
+              {searching ? 'AI處理中...' : '📸 自拍找照片'}
+              <input type="file" accept="image/*" capture="user" onChange={handleSearch} className="hidden" disabled={searching} />
+            </label>
+
+            <label className="cursor-pointer px-4 py-2 rounded-lg text-white font-bold bg-blue-600">
+              {uploading ? '上傳中...' : '📤 批量上傳'}
+              <input type="file" multiple accept="image/*" onChange={handleUpload} className="hidden" disabled={uploading} />
+            </label>
+          </div>
         </div>
-        <script>setTimeout(() => location.reload(), 5000);</script>
-    `);
-});
 
-// -----------------------------------------
-// 📐 輔助函式 (AI & Vector)
-// -----------------------------------------
-function l2Normalize(vector) {
-    const sum = vector.reduce((acc, val) => acc + (val * val), 0);
-    const magnitude = Math.sqrt(sum);
-    return vector.map(val => val / magnitude);
+        {/* 照片列表 */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {photos.map(p => (
+            <PhotoCard key={p.id} photo={p} viewMode={viewMode} onNameFace={handleNameFace} onConfirmDelete={setDeleteTargetId} />
+          ))}
+        </div>
+
+        {/* 刪除確認視窗 */}
+        {deleteTargetId && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-white p-6 rounded-lg text-center">
+              <h3 className="font-bold mb-4">確定刪除？</h3>
+              <div className="flex gap-2">
+                <button onClick={() => setDeleteTargetId(null)} className="px-4 py-2 bg-gray-200 rounded">取消</button>
+                <button onClick={executeDelete} className="px-4 py-2 bg-red-600 text-white rounded">確認</button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </main>
+  );
 }
-
-async function getFaceEmbeddings(imageBuffer) {
-  try {
-    const jpgBuffer = await sharp(imageBuffer).rotate().toFormat('jpeg').toBuffer();
-    const form = new FormData();
-    form.append('file', jpgBuffer, { filename: 'image.jpg' });
-
-    const aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5001/analyze';
-    if (aiUrl.includes('127.0.0.1') && process.env.RAILWAY_ENVIRONMENT) {
-        console.warn("⚠️ 警告: AI_SERVICE_URL 指向 localhost，雲端環境可能會失敗");
-    }
-
-    const response = await axios.post(aiUrl, form, { headers: { ...form.getHeaders() } });
-    return response.data.faces.map(face => ({
-        ...face,
-        embedding: l2Normalize(face.embedding)
-    }));
-  } catch (error) {
-    console.error("❌ AI 分析失敗:", error.message);
-    return [];
-  }
-}
-
-// -----------------------------------------
-// 📝 路由: 賓客登記
-// -----------------------------------------
-app.post('/register', upload.array('photos', 5), async (req, res) => {
-    if (!req.files || req.files.length === 0 || !req.body.name || !req.body.phone) {
-        return res.status(400).send('缺少資料');
-    }
-    try {
-        const { name, phone } = req.body;
-        console.log(`📝 新登記: ${name}`);
-
-        const person = await prisma.person.upsert({
-            where: { phoneNumber: phone },
-            update: { name },
-            create: { name, phoneNumber: phone }
-        });
-
-        let savedCount = 0;
-        for (const file of req.files) {
-            try {
-                const faces = await getFaceEmbeddings(file.buffer);
-                if (faces.length !== 1) continue;
-                
-                const filename = `reg-${person.id}-${Date.now()}-${savedCount}.jpg`;
-                await s3.send(new PutObjectCommand({
-                    Bucket: process.env.AWS_BUCKET_NAME, Key: filename, Body: file.buffer, ContentType: file.mimetype,
-                }));
-                const imageUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${filename}`;
-
-                const photo = await prisma.photo.create({
-                    data: { url: imageUrl, fileName: filename, status: 'Reference' }
-                });
-
-                const vectorString = JSON.stringify(faces[0].embedding);
-                const bboxString = JSON.stringify(faces[0].bbox);
-                
-                // ✅ 修正：強制指定 vector(512) 並移除註解以免 SQL 錯誤
-                await prisma.$executeRaw`
-                    INSERT INTO "Face" ("photoId", "personId", "confidence", "boundingBox", "embedding")
-                    VALUES (${photo.id}, ${person.id}, 100, ${bboxString}::jsonb, ${vectorString}::vector(512));
-                `;
-                savedCount++;
-            } catch (err) { console.error(err); }
-        }
-
-        if (savedCount === 0) return res.status(400).json({ error: "照片不合格" });
-        
-        // 🔥 Baileys 發送訊息
-        if (isWhatsappReady) {
-            const jid = `${phone.replace('+', '')}@s.whatsapp.net`;
-            await sock.sendMessage(jid, { text: `Hi ${name}！登記成功！已記錄 ${savedCount} 個角度。` });
-        }
-
-        res.json({ success: true, count: savedCount });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// -----------------------------------------
-// 📸 路由: 攝影師上傳
-// -----------------------------------------
-app.post('/upload', upload.single('photo'), async (req, res) => {
-  if (!req.file) return res.status(400).send('No file');
-  try {
-    const timestamp = Date.now();
-    const originalFilename = `original-${timestamp}-${req.file.originalname}`;
-    const framedFilename = `framed-${timestamp}-${req.file.originalname}`;
-    
-    // 合成處理
-    const framePath = path.join(__dirname, 'uploads', 'frame.png');
-    let finalBuffer = req.file.buffer;
-    if (fs.existsSync(framePath)) {
-      const frameMetadata = await sharp(framePath).metadata();
-      finalBuffer = await sharp(req.file.buffer)
-        .rotate().resize({ width: frameMetadata.width, height: frameMetadata.height, fit: 'cover' })
-        .composite([{ input: framePath, gravity: 'center' }]).toBuffer();
-    }
-
-    // 上傳 S3
-    await s3.send(new PutObjectCommand({ Bucket: process.env.AWS_BUCKET_NAME, Key: originalFilename, Body: req.file.buffer, ContentType: req.file.mimetype }));
-    await s3.send(new PutObjectCommand({ Bucket: process.env.AWS_BUCKET_NAME, Key: framedFilename, Body: finalBuffer, ContentType: req.file.mimetype }));
-
-    const originalUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${originalFilename}`;
-    const framedUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${framedFilename}`;
-
-    const newPhoto = await prisma.photo.create({
-      data: { url: framedUrl, originalUrl: originalUrl, fileName: framedFilename, status: 'COMPLETED' },
-    });
-
-    // AI 辨識
-    const faces = await getFaceEmbeddings(req.file.buffer);
-    for (const face of faces) {
-        const vectorString = JSON.stringify(face.embedding);
-        const bboxString = JSON.stringify(face.bbox);
-
-        // ✅ 修正：搜尋時使用 vector(512)
-        const [match] = await prisma.$queryRaw`
-          SELECT p.id, p.name, p."phoneNumber", (f.embedding <-> ${vectorString}::vector(512)) as distance
-          FROM "Face" f
-          JOIN "Person" p ON f."personId" = p.id
-          WHERE f.embedding <-> ${vectorString}::vector(512) < 0.6
-          ORDER BY distance ASC LIMIT 1;
-        `;
-
-        // ✅ 修正：存檔時也必須使用 vector(512)
-        await prisma.$executeRaw`
-           INSERT INTO "Face" ("photoId", "personId", "confidence", "boundingBox", "embedding")
-           VALUES (${newPhoto.id}, ${match ? match.id : null}, 100, ${bboxString}::jsonb, ${vectorString}::vector(512));
-        `;
-
-        // 🔥 Baileys 發送照片通知
-        if (match && match.phoneNumber && isWhatsappReady) {
-           const jid = `${match.phoneNumber.replace('+', '')}@s.whatsapp.net`;
-           await sock.sendMessage(jid, { 
-               text: `📸 嘿 ${match.name}！找到一張你的新照片：\n${framedUrl}`
-           });
-        }
-    }
-
-    io.emit('new_photo_ready', newPhoto);
-    res.json(newPhoto);
-
-  } catch (error) {
-    console.error(error);
-    res.status(500).send('Upload failed');
-  }
-});
-
-// -----------------------------------------
-// 其他路由 (刪除、搜尋、查詢)
-// -----------------------------------------
-app.delete('/photo/:id', async (req, res) => {
-    const { id } = req.params;
-    try {
-        const photo = await prisma.photo.findUnique({ where: { id: parseInt(id) } });
-        if (!photo) return res.status(404).send('Photo not found');
-        if (photo.fileName) {
-            try { await s3.send(new DeleteObjectCommand({ Bucket: process.env.AWS_BUCKET_NAME, Key: photo.fileName })); } catch (e) {}
-        }
-        await prisma.photo.delete({ where: { id: parseInt(id) } });
-        io.emit('photo_deleted', parseInt(id));
-        res.json({ success: true });
-    } catch (error) { res.status(500).send("Delete failed"); }
-});
-
-// 🔥 [DEBUG版] 搜尋路由 (完整修正版)
-app.post('/guest-search', upload.single('selfie'), async (req, res) => {
-  console.log("🔍 [DEBUG] 收到搜尋請求，開始處理...");
-
-  // 1. 檢查有沒有上傳照片
-  if (!req.file) {
-    console.log("❌ [DEBUG] 錯誤：沒收到照片檔案");
-    return res.status(400).send('請拍攝照片');
-  }
-
-  try {
-    // 2. 呼叫 AI 取得特徵值
-    console.log("🔥 [DEBUG] 正在呼叫 AI 計算特徵值...");
-    const faces = await getFaceEmbeddings(req.file.buffer);
-    
-    console.log(`✅ [DEBUG] AI 回傳成功，找到 ${faces.length} 張臉`);
-
-    if (faces.length === 0) {
-      return res.status(400).json({ error: '找不到人臉，請重新拍攝' });
-    }
-
-    // 3. 準備搜尋向量 (將陣列轉字串)
-    const targetVector = JSON.stringify(faces[0].embedding);
-    
-    // 4. 執行資料庫搜尋 (這就是最容易出錯的地方)
-    // ⚠️ 關鍵修正：這裡強制加上 ::vector(512)
-    console.log("🚀 [DEBUG] 開始執行 SQL 搜尋...");
-    
-    const photos = await prisma.$queryRaw`
-      SELECT DISTINCT p.id, p.url, p."fileName", 
-      (f.embedding <-> ${targetVector}::vector(512)) as distance
-      FROM "Face" f 
-      JOIN "Photo" p ON f."photoId" = p.id
-      WHERE f.embedding <-> ${targetVector}::vector(512) < 0.6
-      ORDER BY distance ASC 
-      LIMIT 50;
-    `;
-
-    console.log(`🎉 [DEBUG] 搜尋完成！找到 ${photos.length} 張匹配照片`);
-    
-    // 5. 回傳結果
-    res.json(photos);
-
-  } catch (error) {
-    // 6. 捕捉並顯示詳細錯誤
-    console.error("❌❌❌ [嚴重錯誤] 搜尋失敗，原因如下：");
-    console.error(error); // 這行會把具體錯誤印在日誌裡
-    
-    res.status(500).json({ 
-      error: '搜尋過程發生錯誤', 
-      details: error.message 
-    });
-  }
-});
-
-app.get('/photos', async (req, res) => {
-    const photos = await prisma.photo.findMany({ orderBy: { createdAt: 'desc' }, include: { faces: { include: { person: true } } } });
-    res.json(photos);
-});
-
-app.post('/name', async (req, res) => {
-    const { faceId, name } = req.body;
-    try {
-      const result = await prisma.$transaction(async (tx) => {
-        let person = await tx.person.findUnique({ where: { name } });
-        if (!person) person = await tx.person.create({ data: { name } });
-        const updatedFace = await tx.face.update({ where: { id: faceId }, data: { personId: person.id }, include: { person: true } });
-        const autoTagCount = await tx.$executeRaw`
-          UPDATE "Face" SET "personId" = ${person.id}
-          WHERE "personId" IS NULL AND id != ${faceId}
-          AND embedding <-> (SELECT embedding FROM "Face" WHERE id = ${faceId}) < 0.75; 
-        `;
-        return { face: updatedFace, count: autoTagCount };
-      });
-      res.json(result.face);
-    } catch (error) { res.status(500).send("Naming failed"); }
-});
-
-app.get('/person/:name', async (req, res) => {
-    const { name } = req.params;
-    try {
-      const person = await prisma.person.findUnique({
-        where: { name },
-        include: { faces: { include: { photo: { include: { faces: { include: { person: true } } } } } } }
-      });
-      if (!person) return res.json([]);
-      const photos = person.faces.map(face => face.photo);
-      const uniquePhotos = [...new Map(photos.map(p => [p.id, p])).values()];
-      res.json(uniquePhotos);
-    } catch (error) { res.status(500).send("Search failed"); }
-});
-
-server.listen(port, () => {
-  console.log(`🚀 Server running on port ${port}`);
-});
