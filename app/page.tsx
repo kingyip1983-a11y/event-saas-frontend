@@ -1,435 +1,412 @@
-'use client';
-import { useState, useEffect, useRef } from 'react';
-import { io } from 'socket.io-client';
+const express = require('express');
+const multer = require('multer');
+const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
+const { PrismaClient } = require('@prisma/client');
+const { Server } = require("socket.io");
+const http = require('http');
+const cors = require('cors');
+const sharp = require('sharp');
+const axios = require('axios');
+const FormData = require('form-data');
+const path = require('path');
+const fs = require('fs');
 
-// 👇 請確認 IP 正確
-const BACKEND_URL = "https://event-saas-backend-production.up.railway.app";
-const socket = io(BACKEND_URL);
+// 🔥 新引擎引入 (取代 whatsapp-web.js)
+const { 
+    default: makeWASocket, 
+    DisconnectReason, 
+    useMultiFileAuthState 
+} = require('@whiskeysockets/baileys');
+const pino = require('pino');
+const QRCode = require('qrcode'); // 用來產生圖片給前端
 
-// 1. 定義資料型別
-interface Person {
-  id: number;
-  name: string;
+require('dotenv').config();
+
+const app = express();
+const prisma = new PrismaClient();
+
+// ✅ 讓 Railway 決定 Port
+const port = process.env.PORT || 8000;
+
+// -----------------------------------------
+// 🟢 中介軟體設定 (CORS & JSON)
+// -----------------------------------------
+// 解決手機連線失敗的關鍵：允許跨域請求
+app.use(cors({
+    origin: '*', // 允許所有來源 (包含你的手機)
+    methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+app.use(express.json());
+
+// 開放 uploads 資料夾 (以防需要讀取本地檔案)
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+const server = http.createServer(app);
+const io = new Server(server, { 
+    cors: { 
+        origin: "*",
+        methods: ["GET", "POST"]
+    } 
+});
+
+const upload = multer({ storage: multer.memoryStorage() });
+
+// AWS S3 設定
+const s3 = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  },
+});
+
+// -----------------------------------------
+// 🟢 WhatsApp 初始化 (Baileys SaaS 核心)
+// -----------------------------------------
+console.log("🔄 正在啟動 WhatsApp 客戶端 (SaaS Engine)...");
+
+let sock;
+let qrCodeDataUrl = null;
+let isWhatsappReady = false;
+
+async function connectToWhatsApp() {
+    // 設定 Session 儲存 (讓連線持久化)
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+
+    sock = makeWASocket({
+        auth: state,
+        printQRInTerminal: true, // 在 Log 印出文字版 QR
+        logger: pino({ level: 'silent' }), // 隱藏雜訊
+        browser: ["Event SaaS", "Chrome", "1.0.0"],
+    });
+
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
+
+        // A. 產生 QR Code
+        if (qr) {
+            console.log('🚨 新的 QR Code 產生中...');
+            qrCodeDataUrl = await QRCode.toDataURL(qr);
+            io.emit('wa_qr', qrCodeDataUrl);
+            isWhatsappReady = false;
+        }
+
+        // B. 連線成功
+        if (connection === 'open') {
+            console.log('✅ WhatsApp 已連線！(Ready)');
+            qrCodeDataUrl = null;
+            isWhatsappReady = true;
+            io.emit('wa_ready', true);
+        }
+
+        // C. 斷線重連
+        if (connection === 'close') {
+            const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+            console.log('❌ 連線中斷，嘗試重連:', shouldReconnect);
+            if (shouldReconnect) {
+                connectToWhatsApp();
+            }
+        }
+    });
+
+    sock.ev.on('creds.update', saveCreds);
 }
 
-interface Face {
-  id: number;
-  boundingBox: number[];
-  confidence: number;
-  person?: Person; 
-}
+// 啟動連線
+connectToWhatsApp();
 
-interface Photo {
-  id: number;
-  url: string;
-  originalUrl?: string; // 👈 新增：原圖網址
-  status: string;
-  faces: Face[];
-}
-
-// --------------------------------------------------------
-// 2. PhotoCard 組件
-// --------------------------------------------------------
-const PhotoCard = ({ 
-  photo, 
-  viewMode, // 👈 新增：接收顯示模式
-  onNameFace, 
-  onSearchPerson,
-  onConfirmDelete 
-}: { 
-  photo: Photo, 
-  viewMode: 'framed' | 'original', // 👈 定義型別
-  onNameFace: (faceId: number, currentName?: string) => void,
-  onSearchPerson: (name: string) => void,
-  onConfirmDelete: (photoId: number) => void 
-}) => {
-  const [imgSize, setImgSize] = useState({ width: 0, height: 0 });
-  const imgRef = useRef<HTMLImageElement>(null);
-
-  useEffect(() => {
-    if (imgRef.current?.complete) {
-       setImgSize({
-         width: imgRef.current.naturalWidth,
-         height: imgRef.current.naturalHeight
-       });
+// -----------------------------------------
+// 🌐 路由: 現場掃描頁面 (秒開版)
+// -----------------------------------------
+app.get('/connect', (req, res) => {
+    if (isWhatsappReady) {
+        return res.send('<h1 style="color:green; text-align:center; margin-top:50px;">✅ WhatsApp 已連線成功！</h1>');
     }
-  }, []); // 這裡拿掉 [photo.url]，避免切換時沒更新尺寸
+    if (!qrCodeDataUrl) {
+        return res.send('<h1 style="text-align:center; margin-top:50px;">🔄 系統初始化中...<br>(請稍候 3 秒)</h1><script>setTimeout(()=>location.reload(), 3000)</script>');
+    }
+    res.send(`
+        <div style="text-align:center; padding-top:50px; font-family:sans-serif;">
+            <h1>請使用 WhatsApp 掃描</h1>
+            <img src="${qrCodeDataUrl}" style="border:5px solid #333; width:300px;" />
+            <p>QR Code 自動刷新中...</p>
+        </div>
+        <script>setTimeout(() => location.reload(), 5000);</script>
+    `);
+});
 
-  return (
-    <div className="bg-white rounded-xl shadow-md overflow-hidden hover:shadow-xl transition duration-300 group">
-      <div className="relative">
-        {photo.status === 'COMPLETED' || photo.status === 'Reference' ? (
-          <div className="relative">
-            {/* 標籤顯示目前模式 */}
-            <div className="absolute top-2 left-2 z-20 bg-black/40 text-white text-[10px] px-1.5 py-0.5 rounded backdrop-blur-sm pointer-events-none">
-               {viewMode === 'original' ? 'RAW' : 'FRAME'}
-            </div>
+// -----------------------------------------
+// 📐 輔助函式 (AI & Vector)
+// -----------------------------------------
+function l2Normalize(vector) {
+    const sum = vector.reduce((acc, val) => acc + (val * val), 0);
+    const magnitude = Math.sqrt(sum);
+    return vector.map(val => val / magnitude);
+}
 
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img 
-              ref={imgRef}
-              // 👇 根據模式顯示不同照片
-              src={viewMode === 'original' && photo.originalUrl ? photo.originalUrl : photo.url}
-              alt="Event" 
-              className="w-full h-auto block"
-              onLoad={(e) => {
-                setImgSize({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight });
-              }}
-            />
-            
-            {/* 只在原圖模式下顯示人臉框 (因為合成圖可能位置會偏) - 選擇性功能 */}
-            {/* 如果您希望合成圖也顯示框，就拿掉 viewMode === 'original' 的判斷 */}
-            {imgSize.width > 0 && photo.faces && photo.faces.map((face, idx) => {
-              if (!Array.isArray(face.boundingBox) || face.boundingBox.length < 4) return null;
+async function getFaceEmbeddings(imageBuffer) {
+  try {
+    const jpgBuffer = await sharp(imageBuffer).rotate().toFormat('jpeg').toBuffer();
+    const form = new FormData();
+    form.append('file', jpgBuffer, { filename: 'image.jpg' });
 
-              const [x1, y1, x2, y2] = face.boundingBox;
-              const safeW = imgSize.width || 1;
-              const safeH = imgSize.height || 1;
-              
-              const style = {
-                left: `${(x1 / safeW) * 100}%`,
-                top: `${(y1 / safeH) * 100}%`,
-                width: `${((x2 - x1) / safeW) * 100}%`,
-                height: `${((y2 - y1) / safeH) * 100}%`,
-              };
+    const aiUrl = process.env.AI_SERVICE_URL || 'http://127.0.0.1:5001/analyze';
+    if (aiUrl.includes('127.0.0.1') && process.env.RAILWAY_ENVIRONMENT) {
+        console.warn("⚠️ 警告: AI_SERVICE_URL 指向 localhost，雲端環境可能會失敗");
+    }
 
-              return (
-                <div
-                  key={idx}
-                  className="absolute border-2 border-green-400 shadow-[0_0_8px_rgba(74,222,128,0.8)] z-10 cursor-pointer hover:border-blue-400 hover:scale-105 transition-all"
-                  style={style}
-                  onClick={(e) => {
-                    e.stopPropagation(); 
-                    onNameFace(face.id, face.person?.name);
-                  }}
-                  title="點擊輸入名字"
-                >
-                  {face.person && (
-                    <div 
-                      className="absolute -top-6 left-0 bg-blue-600 text-white text-[10px] px-2 py-0.5 rounded shadow-sm whitespace-nowrap z-20 cursor-pointer hover:bg-blue-800 transition-colors"
-                      onClick={(e) => {
-                        e.stopPropagation(); 
-                        onSearchPerson(face.person!.name); 
-                      }}
-                    >
-                      🔍 {face.person.name}
-                    </div>
-                  )}
-                  {!face.person && (
-                     <div className="absolute -top-5 left-0 bg-green-500 text-white text-[9px] px-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                       🏷️ 點擊命名
-                     </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="aspect-[4/3] bg-gray-50 flex flex-col items-center justify-center text-gray-400 animate-pulse">
-             <span className="text-xs font-medium">AI 分析中...</span>
-          </div>
-        )}
-        
-        {/* 刪除按鈕 */}
-        <button 
-          onClick={(e) => {
-            e.stopPropagation();
-            onConfirmDelete(photo.id);
-          }}
-          className="absolute top-2 right-2 bg-red-600/80 hover:bg-red-600 text-white p-1.5 rounded-full shadow-md opacity-0 group-hover:opacity-100 transition-opacity z-30"
-          title="刪除照片"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-        </button>
-      </div>
+    const response = await axios.post(aiUrl, form, { headers: { ...form.getHeaders() } });
+    return response.data.faces.map(face => ({
+        ...face,
+        embedding: l2Normalize(face.embedding)
+    }));
+  } catch (error) {
+    console.error("❌ AI 分析失敗:", error.message);
+    return [];
+  }
+}
 
-      <div className="px-4 py-3 border-t border-gray-100 flex justify-between items-center bg-white">
-         <span className="text-[10px] font-mono text-gray-400">ID: {photo.id}</span>
-         <div className="flex gap-2 overflow-x-auto">
-            {photo.faces?.map((f, i) => f.person ? (
-                <span 
-                  key={i} 
-                  className="text-[10px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded cursor-pointer hover:bg-blue-100"
-                  onClick={() => onSearchPerson(f.person!.name)}
-                >
-                    {f.person.name}
-                </span>
-            ) : null)}
-         </div>
-      </div>
-    </div>
-  );
-};
+// -----------------------------------------
+// 📝 路由: 賓客登記
+// -----------------------------------------
+app.post('/register', upload.array('photos', 5), async (req, res) => {
+    if (!req.files || req.files.length === 0 || !req.body.name || !req.body.phone) {
+        return res.status(400).send('缺少資料');
+    }
+    try {
+        const { name, phone } = req.body;
+        console.log(`📝 新登記: ${name}`);
 
-// --------------------------------------------------------
-// 3. Home 主程式
-// --------------------------------------------------------
-export default function Home() {
-  const [uploading, setUploading] = useState(false);
-  const [searching, setSearching] = useState(false);
-  const [photos, setPhotos] = useState<Photo[]>([]);
-  const [isSearchResult, setIsSearchResult] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState('');
-  const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
-
-  // 🔥 新增：視角模式狀態
-  const [viewMode, setViewMode] = useState<'framed' | 'original'>('framed');
-
-  const loadAllPhotos = () => {
-    setIsSearchResult(false);
-    fetch(`${BACKEND_URL}/photos`)
-      .then(res => res.json())
-      .then(data => {
-        if (Array.isArray(data)) setPhotos(data);
-      })
-      .catch(err => console.error(err));
-  };
-
-  useEffect(() => {
-    loadAllPhotos();
-  }, []);
-
-  useEffect(() => {
-    const handleNewPhoto = (newPhoto: Photo) => {
-      if (!isSearchResult) {
-        setPhotos(prev => {
-          const current = Array.isArray(prev) ? prev : [];
-          if (current.some(p => p.id === newPhoto.id)) return current;
-          return [newPhoto, ...current];
+        const person = await prisma.person.upsert({
+            where: { phoneNumber: phone },
+            update: { name },
+            create: { name, phoneNumber: phone }
         });
-      }
-    };
+
+        let savedCount = 0;
+        for (const file of req.files) {
+            try {
+                const faces = await getFaceEmbeddings(file.buffer);
+                if (faces.length !== 1) continue;
+                
+                const filename = `reg-${person.id}-${Date.now()}-${savedCount}.jpg`;
+                await s3.send(new PutObjectCommand({
+                    Bucket: process.env.AWS_BUCKET_NAME, Key: filename, Body: file.buffer, ContentType: file.mimetype,
+                }));
+                const imageUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${filename}`;
+
+                const photo = await prisma.photo.create({
+                    data: { url: imageUrl, fileName: filename, status: 'Reference' }
+                });
+
+                const vectorString = JSON.stringify(faces[0].embedding);
+                const bboxString = JSON.stringify(faces[0].bbox);
+                
+                // ✅ 修正：強制指定 vector(512) 並移除註解以免 SQL 錯誤
+                await prisma.$executeRaw`
+                    INSERT INTO "Face" ("photoId", "personId", "confidence", "boundingBox", "embedding")
+                    VALUES (${photo.id}, ${person.id}, 100, ${bboxString}::jsonb, ${vectorString}::vector(512));
+                `;
+                savedCount++;
+            } catch (err) { console.error(err); }
+        }
+
+        if (savedCount === 0) return res.status(400).json({ error: "照片不合格" });
+        
+        // 🔥 Baileys 發送訊息
+        if (isWhatsappReady) {
+            const jid = `${phone.replace('+', '')}@s.whatsapp.net`;
+            await sock.sendMessage(jid, { text: `Hi ${name}！登記成功！已記錄 ${savedCount} 個角度。` });
+        }
+
+        res.json({ success: true, count: savedCount });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// -----------------------------------------
+// 📸 路由: 攝影師上傳
+// -----------------------------------------
+app.post('/upload', upload.single('photo'), async (req, res) => {
+  if (!req.file) return res.status(400).send('No file');
+  try {
+    const timestamp = Date.now();
+    const originalFilename = `original-${timestamp}-${req.file.originalname}`;
+    const framedFilename = `framed-${timestamp}-${req.file.originalname}`;
     
-    const handlePhotoDeleted = (deletedId: number) => {
-        setPhotos(prev => prev.filter(p => p.id !== deletedId));
-    };
+    // 合成處理
+    const framePath = path.join(__dirname, 'uploads', 'frame.png');
+    let finalBuffer = req.file.buffer;
+    if (fs.existsSync(framePath)) {
+      const frameMetadata = await sharp(framePath).metadata();
+      finalBuffer = await sharp(req.file.buffer)
+        .rotate().resize({ width: frameMetadata.width, height: frameMetadata.height, fit: 'cover' })
+        .composite([{ input: framePath, gravity: 'center' }]).toBuffer();
+    }
 
-    socket.on('new_photo_ready', handleNewPhoto);
-    socket.on('photo_deleted', handlePhotoDeleted);
+    // 上傳 S3
+    await s3.send(new PutObjectCommand({ Bucket: process.env.AWS_BUCKET_NAME, Key: originalFilename, Body: req.file.buffer, ContentType: req.file.mimetype }));
+    await s3.send(new PutObjectCommand({ Bucket: process.env.AWS_BUCKET_NAME, Key: framedFilename, Body: finalBuffer, ContentType: req.file.mimetype }));
 
-    return () => { 
-        socket.off('new_photo_ready', handleNewPhoto); 
-        socket.off('photo_deleted', handlePhotoDeleted);
-    };
-  }, [isSearchResult]);
+    const originalUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${originalFilename}`;
+    const framedUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${framedFilename}`;
 
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+    const newPhoto = await prisma.photo.create({
+      data: { url: framedUrl, originalUrl: originalUrl, fileName: framedFilename, status: 'COMPLETED' },
+    });
 
-    setUploading(true);
-    for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        setUploadProgress(`正在上傳第 ${i + 1} / ${files.length} 張...`);
-        const formData = new FormData();
-        formData.append('photo', file);
-        try {
-            await fetch(`${BACKEND_URL}/upload`, { method: 'POST', body: formData });
-        } catch (error) {
-            console.error(`上傳失敗: ${file.name}`);
+    // AI 辨識
+    const faces = await getFaceEmbeddings(req.file.buffer);
+    for (const face of faces) {
+        const vectorString = JSON.stringify(face.embedding);
+        const bboxString = JSON.stringify(face.bbox);
+
+        // ✅ 修正：搜尋時使用 vector(512)
+        const [match] = await prisma.$queryRaw`
+          SELECT p.id, p.name, p."phoneNumber", (f.embedding <-> ${vectorString}::vector(512)) as distance
+          FROM "Face" f
+          JOIN "Person" p ON f."personId" = p.id
+          WHERE f.embedding <-> ${vectorString}::vector(512) < 0.6
+          ORDER BY distance ASC LIMIT 1;
+        `;
+
+        // ✅ 修正：存檔時也必須使用 vector(512)
+        await prisma.$executeRaw`
+           INSERT INTO "Face" ("photoId", "personId", "confidence", "boundingBox", "embedding")
+           VALUES (${newPhoto.id}, ${match ? match.id : null}, 100, ${bboxString}::jsonb, ${vectorString}::vector(512));
+        `;
+
+        // 🔥 Baileys 發送照片通知
+        if (match && match.phoneNumber && isWhatsappReady) {
+           const jid = `${match.phoneNumber.replace('+', '')}@s.whatsapp.net`;
+           await sock.sendMessage(jid, { 
+               text: `📸 嘿 ${match.name}！找到一張你的新照片：\n${framedUrl}`
+           });
         }
     }
-    setUploading(false);
-    setUploadProgress('');
-    if (!isSearchResult) loadAllPhotos();
-    e.target.value = ''; 
-  };
 
-  const handleSearch = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files?.[0]) return;
-    setSearching(true);
-    const formData = new FormData();
-    formData.append('photo', e.target.files[0]);
+    io.emit('new_photo_ready', newPhoto);
+    res.json(newPhoto);
 
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Upload failed');
+  }
+});
+
+// -----------------------------------------
+// 其他路由 (刪除、搜尋、查詢)
+// -----------------------------------------
+app.delete('/photo/:id', async (req, res) => {
+    const { id } = req.params;
     try {
-      const res = await fetch(`${BACKEND_URL}/search`, { method: 'POST', body: formData });
-      const results = await res.json();
-      if (Array.isArray(results)) {
-        setPhotos(results);
-        setIsSearchResult(true);
-      } else { alert('搜尋發生錯誤'); }
-    } catch (error) { console.error(error); alert('搜尋連線失敗'); } 
-    finally { setSearching(false); e.target.value = ''; }
-  };
+        const photo = await prisma.photo.findUnique({ where: { id: parseInt(id) } });
+        if (!photo) return res.status(404).send('Photo not found');
+        if (photo.fileName) {
+            try { await s3.send(new DeleteObjectCommand({ Bucket: process.env.AWS_BUCKET_NAME, Key: photo.fileName })); } catch (e) {}
+        }
+        await prisma.photo.delete({ where: { id: parseInt(id) } });
+        io.emit('photo_deleted', parseInt(id));
+        res.json({ success: true });
+    } catch (error) { res.status(500).send("Delete failed"); }
+});
 
-  const handleNameFace = async (faceId: number, currentName?: string) => {
-    const newName = prompt("請輸入這位參加者的名字：", currentName || "");
-    if (!newName || newName === currentName) return;
-    try {
-      const res = await fetch(`${BACKEND_URL}/name`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ faceId, name: newName })
-      });
-      if (res.ok) loadAllPhotos();
-      else alert("命名失敗");
-    } catch (error) { alert("連線錯誤"); }
-  };
+// 🔥 [DEBUG版] 搜尋路由 (完整修正版)
+app.post('/guest-search', upload.single('selfie'), async (req, res) => {
+  console.log("🔍 [DEBUG] 收到搜尋請求，開始處理...");
 
-  const handleSearchPerson = async (name: string) => {
-    setSearching(true);
-    try {
-      const res = await fetch(`${BACKEND_URL}/person/${encodeURIComponent(name)}`);
-      const results = await res.json();
-      if (Array.isArray(results)) {
-        setPhotos(results);
-        setIsSearchResult(true);
-      }
-    } catch (error) { console.error(error); alert("搜尋名字失敗"); } 
-    finally { setSearching(false); }
-  };
+  // 1. 檢查有沒有上傳照片
+  if (!req.file) {
+    console.log("❌ [DEBUG] 錯誤：沒收到照片檔案");
+    return res.status(400).send('請拍攝照片');
+  }
 
-  const executeDelete = async () => {
-    if (!deleteTargetId) return;
+  try {
+    // 2. 呼叫 AI 取得特徵值
+    console.log("🔥 [DEBUG] 正在呼叫 AI 計算特徵值...");
+    const faces = await getFaceEmbeddings(req.file.buffer);
+    
+    console.log(`✅ [DEBUG] AI 回傳成功，找到 ${faces.length} 張臉`);
 
-    try {
-        const res = await fetch(`${BACKEND_URL}/photo/${deleteTargetId}`, { method: 'DELETE' });
-        if (!res.ok) alert("刪除失敗");
-        setDeleteTargetId(null);
-    } catch (err) {
-        alert("刪除連線錯誤");
+    if (faces.length === 0) {
+      return res.status(400).json({ error: '找不到人臉，請重新拍攝' });
     }
-  };
 
-  return (
-    <main className="min-h-screen bg-slate-50 p-6 md:p-12 font-sans relative">
-      <div className="max-w-7xl mx-auto">
-        <header className="flex flex-col md:flex-row justify-between items-center mb-12 gap-6 bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
-          <div className="flex items-center gap-4">
-            <div className="bg-blue-600 text-white p-3 rounded-xl shadow-lg shadow-blue-200">
-               <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
-            </div>
-            <div>
-              <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight cursor-pointer hover:text-blue-600 transition" onClick={loadAllPhotos}>
-                Event AI <span className="text-blue-600">Pro</span>
-              </h1>
-              <p className="text-xs text-slate-400 font-medium">Face Recognition • Tagging • Search</p>
-            </div>
-            
-            {/* 🔥 新增：切換按鈕區塊 */}
-            <div className="ml-4 flex bg-slate-100 p-1 rounded-lg">
-                <button 
-                  onClick={() => setViewMode('original')}
-                  className={`px-3 py-1 text-xs font-bold rounded-md transition ${viewMode === 'original' ? 'bg-white text-blue-600 shadow' : 'text-slate-400 hover:text-slate-600'}`}
-                >
-                  原圖
-                </button>
-                <button 
-                  onClick={() => setViewMode('framed')}
-                  className={`px-3 py-1 text-xs font-bold rounded-md transition ${viewMode === 'framed' ? 'bg-white text-blue-600 shadow' : 'text-slate-400 hover:text-slate-600'}`}
-                >
-                  合成
-                </button>
-            </div>
-            {/* 區塊結束 */}
+    // 3. 準備搜尋向量 (將陣列轉字串)
+    const targetVector = JSON.stringify(faces[0].embedding);
+    
+    // 4. 執行資料庫搜尋 (這就是最容易出錯的地方)
+    // ⚠️ 關鍵修正：這裡強制加上 ::vector(512)
+    console.log("🚀 [DEBUG] 開始執行 SQL 搜尋...");
+    
+    const photos = await prisma.$queryRaw`
+      SELECT DISTINCT p.id, p.url, p."fileName", 
+      (f.embedding <-> ${targetVector}::vector(512)) as distance
+      FROM "Face" f 
+      JOIN "Photo" p ON f."photoId" = p.id
+      WHERE f.embedding <-> ${targetVector}::vector(512) < 0.6
+      ORDER BY distance ASC 
+      LIMIT 50;
+    `;
 
-            {isSearchResult && (
-              <button onClick={loadAllPhotos} className="ml-4 px-4 py-1.5 bg-slate-100 text-slate-600 rounded-full text-xs font-bold hover:bg-slate-200 transition">✕ 清除搜尋</button>
-            )}
-          </div>
-<div className="flex gap-3 w-full md:w-auto">
-            {/* 按鈕 1: 以圖搜圖 (已加入 capture="user" 強制開啟前鏡頭) */}
-            <label className={`flex-1 md:flex-none cursor-pointer flex justify-center items-center gap-2 px-6 py-3.5 rounded-xl text-white font-bold shadow-lg shadow-purple-200 transition-all transform hover:-translate-y-0.5 active:scale-95 ${searching ? 'bg-purple-400' : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:to-indigo-700'}`}>
-              {/* 建議改文案，引導用戶自拍 */}
-              <span>{searching ? 'AI 比對中...' : '自拍找照片'}</span> 
-              <input 
-                type="file" 
-                accept="image/*" 
-                capture="user"  // <--- 關鍵修改！加上這行就會直接開自拍鏡頭
-                onChange={handleSearch} 
-                className="hidden" 
-                disabled={searching || uploading} 
-              />
-            </label>
+    console.log(`🎉 [DEBUG] 搜尋完成！找到 ${photos.length} 張匹配照片`);
+    
+    // 5. 回傳結果
+    res.json(photos);
 
-            {/* 按鈕 2: 批量上傳 (保持不變，不用加 capture，因為可能要選舊圖) */}
-            <label className={`flex-1 md:flex-none cursor-pointer flex justify-center items-center gap-2 px-6 py-3.5 rounded-xl text-white font-bold shadow-lg shadow-blue-200 transition-all transform hover:-translate-y-0.5 active:scale-95 ${uploading ? 'bg-blue-400' : 'bg-gradient-to-r from-blue-600 to-cyan-600 hover:to-cyan-700'}`}>
-              <span>{uploading ? uploadProgress : '批量上傳'}</span>
-              <input type="file" onChange={handleUpload} className="hidden" accept="image/*" multiple disabled={searching || uploading} />
-            </label>
-          </div>
-        </header>
+  } catch (error) {
+    // 6. 捕捉並顯示詳細錯誤
+    console.error("❌❌❌ [嚴重錯誤] 搜尋失敗，原因如下：");
+    console.error(error); // 這行會把具體錯誤印在日誌裡
+    
+    res.status(500).json({ 
+      error: '搜尋過程發生錯誤', 
+      details: error.message 
+    });
+  }
+});
 
+app.get('/photos', async (req, res) => {
+    const photos = await prisma.photo.findMany({ orderBy: { createdAt: 'desc' }, include: { faces: { include: { person: true } } } });
+    res.json(photos);
+});
 
-      
-        <div className="flex justify-center mb-8">
-          <div className="bg-white p-1.5 rounded-xl shadow-sm border border-slate-200 inline-flex">
-            <button 
-              onClick={() => setViewMode('original')}
-              className={`px-6 py-2 rounded-lg text-sm font-bold transition-all ${
-                viewMode === 'original' 
-                  ? 'bg-slate-800 text-white shadow-md' 
-                  : 'text-slate-500 hover:bg-slate-50'
-              }`}
-            >
-              📷 攝影師原圖
-            </button>
-            <div className="w-px bg-slate-200 mx-1"></div> {/* 分隔線 */}
-            <button 
-              onClick={() => setViewMode('framed')}
-              className={`px-6 py-2 rounded-lg text-sm font-bold transition-all ${
-                viewMode === 'framed' 
-                  ? 'bg-blue-600 text-white shadow-md' 
-                  : 'text-slate-500 hover:bg-slate-50'
-              }`}
-            >
-              🖼️ 客人合成照
-            </button>
-          </div>
-        </div>
+app.post('/name', async (req, res) => {
+    const { faceId, name } = req.body;
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        let person = await tx.person.findUnique({ where: { name } });
+        if (!person) person = await tx.person.create({ data: { name } });
+        const updatedFace = await tx.face.update({ where: { id: faceId }, data: { personId: person.id }, include: { person: true } });
+        const autoTagCount = await tx.$executeRaw`
+          UPDATE "Face" SET "personId" = ${person.id}
+          WHERE "personId" IS NULL AND id != ${faceId}
+          AND embedding <-> (SELECT embedding FROM "Face" WHERE id = ${faceId}) < 0.75; 
+        `;
+        return { face: updatedFace, count: autoTagCount };
+      });
+      res.json(result.face);
+    } catch (error) { res.status(500).send("Naming failed"); }
+});
 
+app.get('/person/:name', async (req, res) => {
+    const { name } = req.params;
+    try {
+      const person = await prisma.person.findUnique({
+        where: { name },
+        include: { faces: { include: { photo: { include: { faces: { include: { person: true } } } } } } }
+      });
+      if (!person) return res.json([]);
+      const photos = person.faces.map(face => face.photo);
+      const uniquePhotos = [...new Map(photos.map(p => [p.id, p])).values()];
+      res.json(uniquePhotos);
+    } catch (error) { res.status(500).send("Search failed"); }
+});
 
-        <div className="flex justify-between items-end mb-6 px-2">
-          <h2 className="text-xl font-bold text-slate-800">
-            {isSearchResult ? '🎯 搜尋結果' : '📸 照片列表'}
-          </h2>
-          <span className="text-xs font-mono text-slate-400">Total: {photos.length}</span>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {Array.isArray(photos) && photos.map((photo) => (
-            <PhotoCard 
-              key={photo.id} 
-              photo={photo} 
-              viewMode={viewMode} // 🔥 新增：傳入 viewMode
-              onNameFace={handleNameFace}
-              onSearchPerson={handleSearchPerson}
-              onConfirmDelete={(id) => setDeleteTargetId(id)}
-            />
-          ))}
-        </div>
-      </div>
-
-      {deleteTargetId !== null && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 transform scale-100 animate-in zoom-in-95 duration-200">
-            <div className="flex flex-col items-center text-center">
-              <div className="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-4">
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-              </div>
-              <h3 className="text-lg font-bold text-gray-900 mb-2">確定要刪除這張照片嗎？</h3>
-              <p className="text-sm text-gray-500 mb-6">
-                此動作無法復原。刪除後，這張照片將從資料庫與雲端完全移除。
-              </p>
-              <div className="flex gap-3 w-full">
-                <button 
-                  onClick={() => setDeleteTargetId(null)}
-                  className="flex-1 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition"
-                >
-                  取消
-                </button>
-                <button 
-                  onClick={executeDelete}
-                  className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg shadow-lg shadow-red-200 transition"
-                >
-                  確認刪除
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-    </main>
-  );
-}
+server.listen(port, () => {
+  console.log(`🚀 Server running on port ${port}`);
+});
