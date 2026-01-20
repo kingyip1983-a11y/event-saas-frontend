@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 import Papa from 'papaparse';
 
-// 👇 請確認後端網址
+// 👇 確認後端網址 (正確版)
 const BACKEND_URL = "https://event-saas-backend-production.up.railway.app";
 const socket = io(BACKEND_URL);
 
@@ -77,6 +77,26 @@ export default function PhotographerPage() {
   // ----------------------------------------------------
   // 3. 操作邏輯
   // ----------------------------------------------------
+  
+  // 👇 新增：下載範本的功能
+  const downloadTemplate = () => {
+    // 1. 定義 CSV 內容 (加入 BOM \uFEFF 讓 Excel 能正確顯示中文)
+    const csvContent = "\uFEFFphone,name,seat\n+85291234567,陳大文,Table 1\n+886912345678,王小明,VIP A";
+    
+    // 2. 建立檔案物件
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    
+    // 3. 建立下載連結並自動點擊
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", "賓客名單範本.csv");
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.length) return;
     setUploading(true);
@@ -135,15 +155,29 @@ export default function PhotographerPage() {
             // 簡單的格式檢查
             if (parsedData.length === 0) return alert("CSV 是空的！");
             
-            // 轉換資料格式 (適應 Excel 輸出的欄位名)
-            // 假設 CSV 標題是: name, phone, seat
-            const formattedGuests = parsedData.map((row: any) => ({
-                name: row.name || row.Name || row.姓名 || '',
-                phone: row.phone || row.Phone || row.電話 || '',
-                seatNumber: row.seat || row.Seat || row.座位 || row.seatNumber
-            })).filter((g: any) => g.phone); // 過濾掉沒電話的無效行
+            // 轉換資料格式 (適應各種 Excel 標題寫法)
+            const formattedGuests = parsedData.map((row: any) => {
+                // 為了避免標題有空格 (例如 " seat ") 導致讀不到，先把所有 key 轉小寫並去空白
+                // 這段邏輯能讓程式變得更強壯
+                const normalizedRow: any = {};
+                // 如果 row 是物件
+                if (typeof row === 'object' && row !== null) {
+                    Object.keys(row).forEach(key => {
+                        normalizedRow[key.trim().toLowerCase()] = row[key];
+                    });
+                }
 
-            if (formattedGuests.length === 0) return alert("找不到有效的資料，請確認 CSV 欄位名稱為: phone, name, seat");
+                return {
+                    // 嘗試讀取各種可能的欄位名稱
+                    name: row.name || row.Name || row.姓名 || row.Name_Tc || normalizedRow['name'] || '',
+                    phone: row.phone || row.Phone || row.電話 || row.Mobile || normalizedRow['phone'] || '',
+                    
+                    // 👇 支援多種座位標題寫法
+                    seatNumber: row.seat || row.Seat || row.座位 || row.座號 || row.Table || row.table || row.seatNumber || normalizedRow['seat'] || ''
+                };
+            }).filter((g: any) => g.phone); // 過濾掉沒電話的無效行
+
+            if (formattedGuests.length === 0) return alert("找不到有效的資料，請下載範本並確認欄位名稱為: phone, name, seat");
 
             if (!confirm(`準備匯入 ${formattedGuests.length} 筆資料，確定嗎？`)) return;
 
@@ -158,7 +192,6 @@ export default function PhotographerPage() {
                     alert(`🎉 成功匯入 ${formattedGuests.length} 筆資料！`);
                     loadAllGuests(); 
                 } else {
-                    // 👇 讀取後端回傳的錯誤文字
                     const errorText = await res.text();
                     alert(`匯入失敗 (Server Error): ${errorText}`);
                 }
@@ -265,19 +298,30 @@ export default function PhotographerPage() {
                 {/* 左邊：操作區 */}
                 <div className="md:col-span-1 space-y-6">
                     
-                    {/* 👇 新增：CSV 批量匯入區塊 */}
-                    <div className="bg-gradient-to-br from-green-900/50 to-emerald-900/50 border border-green-700/50 p-6 rounded-2xl">
+                    {/* 👇 修改：CSV 批量匯入區塊 (加入下載按鈕) */}
+                    <div className="bg-gradient-to-br from-green-900/50 to-emerald-900/50 border border-green-700/50 p-6 rounded-2xl relative group">
+                        
+                        {/* ⬇️ 下載按鈕 (放在右上角) */}
+                        <button 
+                            onClick={downloadTemplate}
+                            className="absolute top-4 right-4 text-xs bg-green-800 hover:bg-green-700 text-green-100 px-3 py-1.5 rounded-lg transition flex items-center gap-1 border border-green-600 shadow-lg z-10"
+                            title="下載 Excel 範本"
+                        >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                            下載範本
+                        </button>
+
                         <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
                             <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
                             Excel / CSV 批量匯入
                         </h3>
                         <p className="text-xs text-green-200 mb-4 leading-relaxed">
-                            請上傳 .csv 檔案。表格第一行標題請設為：<br/>
-                            <code className="bg-black/30 px-1 py-0.5 rounded text-green-300">phone</code>, <code className="bg-black/30 px-1 py-0.5 rounded text-green-300">name</code>, <code className="bg-black/30 px-1 py-0.5 rounded text-green-300">seat</code>
+                            請先下載範本，填入資料後上傳。<br/>
+                            <span className="opacity-70">支援標題：電話, 姓名, 座位 (Table, 座號)</span>
                         </p>
                         <label className="flex items-center justify-center w-full p-4 border-2 border-dashed border-green-600/50 rounded-xl cursor-pointer hover:bg-green-600/20 transition group">
                             <div className="text-center">
-                                <span className="text-sm font-bold text-green-400 group-hover:text-green-300">點擊選擇檔案</span>
+                                <span className="text-sm font-bold text-green-400 group-hover:text-green-300">📁 點擊上傳 CSV 檔案</span>
                             </div>
                             <input type="file" accept=".csv" onChange={handleCSVUpload} className="hidden" />
                         </label>
