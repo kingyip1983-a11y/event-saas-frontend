@@ -156,12 +156,15 @@ export default function PhotographerPage() {
                 
                 if (res.ok) {
                     alert(`🎉 成功匯入 ${formattedGuests.length} 筆資料！`);
-                    loadAllGuests(); // 重新整理列表
+                    loadAllGuests(); 
                 } else {
-                    alert("匯入失敗，請檢查 CSV 格式");
+                    // 👇 讀取後端回傳的錯誤文字
+                    const errorText = await res.text();
+                    alert(`匯入失敗 (Server Error): ${errorText}`);
                 }
-            } catch (err) {
-                alert("連線錯誤");
+            } catch (err: any) {
+                console.error(err);
+                alert(`上傳失敗: ${err.message || "未知錯誤"}`);
             }
             
             e.target.value = ''; // 清空 input 讓下次能再選同個檔案
