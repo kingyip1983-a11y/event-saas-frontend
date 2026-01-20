@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
+import Papa from 'papaparse';
 
 // 👇 請確認後端網址
 const BACKEND_URL = "https://event-saas-backend-production.up.railway.app";
@@ -120,6 +121,57 @@ export default function PhotographerPage() {
     } catch (err) { alert("連線錯誤"); }
   };
 
+  // 📂 處理 CSV 上傳
+  const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    Papa.parse(file, {
+        header: true, // 告訴它第一行是標題 (Name, Phone, Seat)
+        skipEmptyLines: true,
+        complete: async (results) => {
+            const parsedData = results.data;
+            
+            // 簡單的格式檢查
+            if (parsedData.length === 0) return alert("CSV 是空的！");
+            
+            // 轉換資料格式 (適應 Excel 輸出的欄位名)
+            // 假設 CSV 標題是: name, phone, seat
+            const formattedGuests = parsedData.map((row: any) => ({
+                name: row.name || row.Name || row.姓名 || '',
+                phone: row.phone || row.Phone || row.電話 || '',
+                seatNumber: row.seat || row.Seat || row.座位 || row.seatNumber
+            })).filter((g: any) => g.phone); // 過濾掉沒電話的無效行
+
+            if (formattedGuests.length === 0) return alert("找不到有效的資料，請確認 CSV 欄位名稱為: phone, name, seat");
+
+            if (!confirm(`準備匯入 ${formattedGuests.length} 筆資料，確定嗎？`)) return;
+
+            try {
+                const res = await fetch(`${BACKEND_URL}/upsert-guests-bulk`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ guests: formattedGuests })
+                });
+                
+                if (res.ok) {
+                    alert(`🎉 成功匯入 ${formattedGuests.length} 筆資料！`);
+                    loadAllGuests(); // 重新整理列表
+                } else {
+                    alert("匯入失敗，請檢查 CSV 格式");
+                }
+            } catch (err) {
+                alert("連線錯誤");
+            }
+            
+            e.target.value = ''; // 清空 input 讓下次能再選同個檔案
+        },
+        error: (error) => {
+            alert("CSV 解析失敗：" + error.message);
+        }
+    });
+  };
+
   // ----------------------------------------------------
   // 🔐 登入畫面
   // ----------------------------------------------------
@@ -207,13 +259,33 @@ export default function PhotographerPage() {
         {/* 📋 TAB: 賓客名單管理 */}
         {activeTab === 'guests' && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                {/* 左邊：新增表單 */}
-                <div className="md:col-span-1">
+                {/* 左邊：操作區 */}
+                <div className="md:col-span-1 space-y-6">
+                    
+                    {/* 👇 新增：CSV 批量匯入區塊 */}
+                    <div className="bg-gradient-to-br from-green-900/50 to-emerald-900/50 border border-green-700/50 p-6 rounded-2xl">
+                        <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
+                            <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                            Excel / CSV 批量匯入
+                        </h3>
+                        <p className="text-xs text-green-200 mb-4 leading-relaxed">
+                            請上傳 .csv 檔案。表格第一行標題請設為：<br/>
+                            <code className="bg-black/30 px-1 py-0.5 rounded text-green-300">phone</code>, <code className="bg-black/30 px-1 py-0.5 rounded text-green-300">name</code>, <code className="bg-black/30 px-1 py-0.5 rounded text-green-300">seat</code>
+                        </p>
+                        <label className="flex items-center justify-center w-full p-4 border-2 border-dashed border-green-600/50 rounded-xl cursor-pointer hover:bg-green-600/20 transition group">
+                            <div className="text-center">
+                                <span className="text-sm font-bold text-green-400 group-hover:text-green-300">點擊選擇檔案</span>
+                            </div>
+                            <input type="file" accept=".csv" onChange={handleCSVUpload} className="hidden" />
+                        </label>
+                    </div>
+
+                    {/* 單筆新增表單 */}
                     <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl sticky top-4">
-                        <h3 className="text-lg font-bold text-white mb-4">＋ 新增/更新 賓客座位</h3>
+                        <h3 className="text-lg font-bold text-white mb-4">＋ 單筆新增</h3>
                         <form onSubmit={handleAddGuest} className="space-y-4">
                             <div>
-                                <label className="text-xs text-slate-500 uppercase font-bold">電話 (必填, 含國碼)</label>
+                                <label className="text-xs text-slate-500 uppercase font-bold">電話 (必填)</label>
                                 <input 
                                     type="text" 
                                     value={newGuest.phone}
@@ -223,7 +295,7 @@ export default function PhotographerPage() {
                                 />
                             </div>
                             <div>
-                                <label className="text-xs text-slate-500 uppercase font-bold">姓名 (選填)</label>
+                                <label className="text-xs text-slate-500 uppercase font-bold">姓名</label>
                                 <input 
                                     type="text" 
                                     value={newGuest.name}
@@ -233,7 +305,7 @@ export default function PhotographerPage() {
                                 />
                             </div>
                             <div>
-                                <label className="text-xs text-slate-500 uppercase font-bold text-yellow-500">座位號 / 枱號</label>
+                                <label className="text-xs text-slate-500 uppercase font-bold text-yellow-500">座位號</label>
                                 <input 
                                     type="text" 
                                     value={newGuest.seat}
@@ -243,7 +315,7 @@ export default function PhotographerPage() {
                                 />
                             </div>
                             <button type="submit" className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl transition">
-                                儲存資料
+                                儲存
                             </button>
                         </form>
                     </div>
@@ -251,44 +323,50 @@ export default function PhotographerPage() {
 
                 {/* 右邊：名單列表 */}
                 <div className="md:col-span-2">
-                    <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-                        <table className="w-full text-left">
-                            <thead className="bg-slate-800 text-slate-400 text-xs uppercase">
-                                <tr>
-                                    <th className="p-4">姓名</th>
-                                    <th className="p-4">電話</th>
-                                    <th className="p-4">座位號</th>
-                                    <th className="p-4 text-right">狀態</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-800">
-                                {guests.map(g => (
-                                    <tr key={g.id} className="hover:bg-slate-800/50 transition">
-                                        <td className="p-4 font-bold text-white">{g.name || '-'}</td>
-                                        <td className="p-4 text-slate-400 font-mono">{g.phoneNumber}</td>
-                                        <td className="p-4">
-                                            {g.seatNumber ? (
-                                                <span className="bg-yellow-500/20 text-yellow-500 px-2 py-1 rounded text-sm font-bold border border-yellow-500/30">
-                                                    {g.seatNumber}
-                                                </span>
-                                            ) : (
-                                                <span className="text-slate-600 text-sm">未安排</span>
-                                            )}
-                                        </td>
-                                        <td className="p-4 text-right">
-                                            <span className="text-green-500 text-xs">已同步</span>
-                                        </td>
-                                    </tr>
-                                ))}
-                                {guests.length === 0 && (
+                     <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+                        <div className="p-4 bg-slate-800/50 border-b border-slate-800 flex justify-between items-center">
+                            <span className="text-slate-400 text-sm">已匯入名單 ({guests.length} 人)</span>
+                            <button onClick={loadAllGuests} className="text-xs text-blue-400 hover:text-blue-300">↻ 重新整理</button>
+                        </div>
+                        <div className="max-h-[70vh] overflow-y-auto">
+                            <table className="w-full text-left">
+                                <thead className="bg-slate-800 text-slate-400 text-xs uppercase sticky top-0 z-10 shadow-sm">
                                     <tr>
-                                        <td colSpan={4} className="p-8 text-center text-slate-500">
-                                            尚無資料，請從左側新增。
-                                        </td>
+                                        <th className="p-4">姓名</th>
+                                        <th className="p-4">電話</th>
+                                        <th className="p-4">座位號</th>
+                                        <th className="p-4 text-right">狀態</th>
                                     </tr>
-                                )}
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody className="divide-y divide-slate-800">
+                                    {guests.map(g => (
+                                        <tr key={g.id} className="hover:bg-slate-800/50 transition">
+                                            <td className="p-4 font-bold text-white">{g.name || '-'}</td>
+                                            <td className="p-4 text-slate-400 font-mono">{g.phoneNumber}</td>
+                                            <td className="p-4">
+                                                {g.seatNumber ? (
+                                                    <span className="bg-yellow-500/20 text-yellow-500 px-2 py-1 rounded text-sm font-bold border border-yellow-500/30">
+                                                        {g.seatNumber}
+                                                    </span>
+                                                ) : (
+                                                    <span className="text-slate-600 text-sm">未安排</span>
+                                                )}
+                                            </td>
+                                            <td className="p-4 text-right">
+                                                <span className="text-green-500 text-xs">● 待命</span>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {guests.length === 0 && (
+                                        <tr>
+                                            <td colSpan={4} className="p-12 text-center text-slate-500">
+                                                尚無資料，請使用 CSV 匯入。
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
             </div>
