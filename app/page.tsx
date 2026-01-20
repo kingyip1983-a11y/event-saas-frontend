@@ -11,9 +11,9 @@ interface Face { id: number; boundingBox: number[]; confidence: number; person?:
 interface Photo { id: number; url: string; originalUrl?: string; status: string; faces: Face[]; }
 
 // --------------------------------------------------------
-// PhotoCard 組件 (保持不變，負責顯示照片)
+// PhotoCard 組件
 // --------------------------------------------------------
-const PhotoCard = ({ photo, viewMode, onNameFace, onSearchPerson, onConfirmDelete }: any) => {
+const PhotoCard = ({ photo, viewMode, onConfirmDelete }: any) => {
   const [imgSize, setImgSize] = useState({ width: 0, height: 0 });
   const imgRef = useRef<HTMLImageElement>(null);
 
@@ -48,7 +48,7 @@ const PhotoCard = ({ photo, viewMode, onNameFace, onSearchPerson, onConfirmDelet
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
       </a>
 
-      {/* 只有在開發模式或特定權限下才顯示刪除鈕，這裡先留著 */}
+      {/* 雖然賓客不應該亂刪，但如果為了隱私想刪除自己的照片，這裡先保留功能，或者你可以移除這段 button */}
       <button 
         onClick={(e) => { e.stopPropagation(); onConfirmDelete(photo.id); }}
         className="absolute top-2 right-2 bg-red-600/80 text-white p-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity z-30"
@@ -60,45 +60,28 @@ const PhotoCard = ({ photo, viewMode, onNameFace, onSearchPerson, onConfirmDelet
 };
 
 // --------------------------------------------------------
-// 主程式 Home (大幅改造：搜尋優先)
+// 主程式 Home (純淨搜尋版)
 // --------------------------------------------------------
 export default function Home() {
-  const [uploading, setUploading] = useState(false);
   const [searching, setSearching] = useState(false);
   const [photos, setPhotos] = useState<Photo[]>([]);
-  
-  // 🔥 新增：是否已經搜尋過？ (預設 false，這樣一進來就不會顯示照片)
   const [hasSearched, setHasSearched] = useState(false);
-  
   const [viewMode, setViewMode] = useState<'framed' | 'original'>('framed');
   const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
 
-  // 初始化時建立 Socket 監聽，但「不」主動撈照片
   useEffect(() => {
+    // 監聽新照片 (僅在已搜尋狀態下更新，避免未搜尋時看到東西)
     socket.on('new_photo_ready', (newPhoto: Photo) => {
-      // 只有當使用者在看「全部照片」模式時，才即時推播新照片
-      // 如果是「搜尋結果」模式，就不干擾
       if (hasSearched && photos.length > 0) { 
-        // 這裡可以決定要不要自動加入，為了隱私，通常搜尋模式下不自動加別人的圖
+         // 選項：是否要自動把新照片加進來？
+         // 為了隱私，通常搜尋結果是固定的，除非使用者重新搜尋，
+         // 這裡暫時不自動加入，以免看到別人的。
       }
     });
     return () => { socket.off('new_photo_ready'); };
   }, [hasSearched, photos]);
 
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files?.length) return;
-    setUploading(true);
-    for (let i = 0; i < e.target.files.length; i++) {
-        const formData = new FormData();
-        formData.append('photo', e.target.files[i]);
-        await fetch(`${BACKEND_URL}/upload`, { method: 'POST', body: formData }).catch(console.error);
-    }
-    setUploading(false);
-    alert("上傳完成！");
-    e.target.value = ''; 
-  };
-
-  // 🔥 關鍵修正：自拍搜尋
+  // 自拍搜尋
   const handleSearch = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.[0]) return;
     setSearching(true);
@@ -111,7 +94,7 @@ export default function Home() {
       
       if (res.ok && Array.isArray(results)) {
         setPhotos(results);
-        setHasSearched(true); // ✅ 標記為「已搜尋」，顯示結果頁
+        setHasSearched(true);
       } else { 
         alert(results.error || '搜尋發生錯誤'); 
       }
@@ -129,7 +112,6 @@ export default function Home() {
     setPhotos(prev => prev.filter(p => p.id !== deleteTargetId));
   };
 
-  // 重置回首頁
   const resetSearch = () => {
     setPhotos([]);
     setHasSearched(false);
@@ -140,7 +122,6 @@ export default function Home() {
       
       {/* -------------------------------------------
           情境 A: 還沒搜尋 (首頁 - 隱私模式)
-          顯示大大的搜尋按鈕，不顯示任何照片
       ------------------------------------------- */}
       {!hasSearched && (
         <div className="flex flex-col items-center justify-center min-h-screen p-6 relative overflow-hidden">
@@ -175,21 +156,12 @@ export default function Home() {
                     </span>
                     <input type="file" accept="image/*" capture="user" onChange={handleSearch} className="hidden" disabled={searching} />
                 </label>
-
-                {/* 攝影師入口 (隱藏式或小按鈕) */}
-                <div className="mt-12 pt-8 border-t border-slate-800">
-                    <label className="text-sm text-slate-500 hover:text-slate-300 cursor-pointer transition">
-                        我是攝影師 / 上傳照片
-                        <input type="file" multiple accept="image/*" onChange={handleUpload} className="hidden" disabled={uploading} />
-                    </label>
-                </div>
             </div>
         </div>
       )}
 
       {/* -------------------------------------------
           情境 B: 搜尋結果頁 (Result Page)
-          只顯示找到的照片
       ------------------------------------------- */}
       {hasSearched && (
         <div className="max-w-7xl mx-auto p-4 md:p-8">
@@ -226,9 +198,7 @@ export default function Home() {
                             key={p.id} 
                             photo={p} 
                             viewMode={viewMode} 
-                            onNameFace={() => {}} 
                             onConfirmDelete={setDeleteTargetId} 
-                            onSearchPerson={() => {}}
                         />
                     ))}
                 </div>
@@ -236,7 +206,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* 刪除確認視窗 (維持原樣) */}
+      {/* 刪除確認視窗 */}
       {deleteTargetId && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 backdrop-blur-sm">
           <div className="bg-slate-900 border border-slate-700 p-6 rounded-2xl text-center max-w-sm w-full mx-4">
