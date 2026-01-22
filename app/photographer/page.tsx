@@ -4,6 +4,8 @@
 import { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 import Papa from 'papaparse';
+// 1. 在檔案最上面引入套件
+import imageCompression from 'browser-image-compression';
 
 // 👇 請確認後端網址
 const BACKEND_URL = "https://event-saas-backend-production.up.railway.app";
@@ -93,13 +95,49 @@ export default function PhotographerPage() {
     link.click();
   };
 
+  // 2. 修改 handleUpload 函式
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.length) return;
     setUploading(true);
+
+    // 設定壓縮參數
+    const options = {
+      maxSizeMB: 1,              // 最大不超過 1MB (這已經很夠用了)
+      maxWidthOrHeight: 2048,    // 長邊限制在 2048px (2K畫質，AI最愛)
+      useWebWorker: true,        // 開啟多執行緒加速，避免網頁卡頓
+      initialQuality: 0.8,       // 畫質 80%
+    };
+
     for (let i = 0; i < e.target.files.length; i++) {
-        const formData = new FormData();
-        formData.append('photo', e.target.files[i]);
-        await fetch(`${BACKEND_URL}/upload`, { method: 'POST', body: formData }).catch(console.error);
+        const originalFile = e.target.files[i];
+        
+        try {
+            console.log(`壓縮前: ${(originalFile.size / 1024 / 1024).toFixed(2)} MB`);
+            
+            // 🔥 開始壓縮
+            const compressedFile = await imageCompression(originalFile, options);
+            
+            console.log(`壓縮後: ${(compressedFile.size / 1024 / 1024).toFixed(2)} MB`);
+
+            // 建立新的 File 物件 (保留原始檔名)
+            // 因為壓縮後可能會變成 blob，我們要把它變回 File 方便上傳
+            const finalFile = new File([compressedFile], originalFile.name, {
+                type: compressedFile.type,
+                lastModified: Date.now(),
+            });
+
+            const formData = new FormData();
+            formData.append('photo', finalFile);
+
+            await fetch(`${BACKEND_URL}/upload`, { method: 'POST', body: formData });
+
+        } catch (error) {
+            console.error("壓縮失敗，嘗試上傳原圖:", error);
+            // 如果壓縮失敗，就上傳原圖當備案
+            const formData = new FormData();
+            formData.append('photo', originalFile);
+            await fetch(`${BACKEND_URL}/upload`, { method: 'POST', body: formData });
+        }
     }
     setUploading(false);
     loadAllPhotos();
