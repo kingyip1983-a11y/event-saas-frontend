@@ -202,7 +202,7 @@ export default function PhotographerPage() {
                 <div key={photo.id} className="relative group bg-slate-900 rounded-lg overflow-hidden border border-slate-800">
                     <img 
                         src={viewMode === 'original' && photo.originalUrl ? photo.originalUrl : photo.url} 
-                        className="w-full aspect-[2/3] object-cover" 
+                        className="w-full h-auto block" 
                         loading="lazy" 
                     />
                     
