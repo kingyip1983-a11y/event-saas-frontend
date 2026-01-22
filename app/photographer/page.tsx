@@ -1,10 +1,12 @@
-// Force Update: Fix green box display
+// Force Update: Restore Guest List Tab
+
 'use client';
 
 import { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 import Papa from 'papaparse';
 
+// 👇 請確認後端網址
 const BACKEND_URL = "https://event-saas-backend-production.up.railway.app";
 const socket = io(BACKEND_URL);
 
@@ -22,7 +24,7 @@ interface Photo {
     url: string; 
     originalUrl?: string; 
     status: string; 
-    faces?: Face[]; // 👈 確保有這個欄位
+    faces?: Face[]; 
 }
 
 interface Person { id: number; name: string; phoneNumber: string; seatNumber?: string; }
@@ -175,8 +177,8 @@ export default function PhotographerPage() {
           <div className="flex gap-4">
              <h1 className="text-2xl font-bold text-white">工作台</h1>
              <div className="flex bg-slate-900 rounded p-1">
-                <button onClick={() => setActiveTab('photos')} className={`px-4 py-1 rounded ${activeTab==='photos'?'bg-blue-600':''}`}>照片</button>
-                <button onClick={() => setActiveTab('guests')} className={`px-4 py-1 rounded ${activeTab==='guests'?'bg-blue-600':''}`}>名單</button>
+                <button onClick={() => setActiveTab('photos')} className={`px-4 py-1 rounded transition ${activeTab==='photos'?'bg-blue-600 text-white':'text-slate-400'}`}>照片</button>
+                <button onClick={() => setActiveTab('guests')} className={`px-4 py-1 rounded transition ${activeTab==='guests'?'bg-blue-600 text-white':'text-slate-400'}`}>名單</button>
              </div>
           </div>
           {activeTab === 'photos' && (
@@ -193,6 +195,7 @@ export default function PhotographerPage() {
           )}
         </header>
 
+        {/* 📸 照片 Tab */}
         {activeTab === 'photos' && (
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
             {photos.map(photo => (
@@ -203,7 +206,7 @@ export default function PhotographerPage() {
                         loading="lazy" 
                     />
                     
-                    {/* 👇👇👇 綠色 AI 框框渲染區 👇👇👇 */}
+                    {/* 👇 綠色 AI 框框渲染區 */}
                     {photo.faces?.map((face, i) => (
                         <div key={i} 
                             style={{
@@ -212,29 +215,86 @@ export default function PhotographerPage() {
                                 top: `${face.boundingBox.y * 100}%`,
                                 width: `${face.boundingBox.width * 100}%`,
                                 height: `${face.boundingBox.height * 100}%`,
-                                border: '2px solid #00ff00', // 鮮綠色框
+                                border: '2px solid #00ff00', 
                                 boxShadow: '0 0 5px #00ff00'
                             }}
                         >
-                            {/* 如果有認出人，顯示名字 */}
                             {face.person && (
-                                <div className="absolute -top-6 left-0 bg-green-600 text-white text-[10px] px-1 rounded whitespace-nowrap">
+                                <div className="absolute -top-6 left-0 bg-green-600 text-white text-[10px] px-1 rounded whitespace-nowrap z-10">
                                     {face.person.name}
                                 </div>
                             )}
                         </div>
                     ))}
-                    {/* 👆👆👆 結束 👆👆👆 */}
 
-                    <button onClick={() => setDeleteTargetId(photo.id)} className="absolute top-2 right-2 p-2 bg-red-600 text-white rounded-full opacity-0 group-hover:opacity-100 transition">🗑️</button>
+                    <button onClick={() => setDeleteTargetId(photo.id)} className="absolute top-2 right-2 p-2 bg-red-600 text-white rounded-full opacity-0 group-hover:opacity-100 transition z-20">🗑️</button>
                 </div>
             ))}
             </div>
         )}
 
+        {/* 📋 名單 Tab (我把這裡加回來了！) */}
         {activeTab === 'guests' && (
-            // ... (省略賓客列表 HTML 以節省篇幅，這部分您原本的就很好，或直接保留原本的)
-             <div className="text-center text-slate-500 mt-10">請參考先前的代碼或自行保留此區塊</div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                <div className="md:col-span-1 space-y-6">
+                    {/* CSV 上傳區 */}
+                    <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl relative group">
+                        <button onClick={downloadTemplate} className="absolute top-4 right-4 text-xs bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-slate-300">下載範本</button>
+                        <h3 className="text-lg font-bold text-white mb-2">CSV 匯入</h3>
+                        <p className="text-xs text-slate-400 mb-4">⚠️ 上傳將會<span className="text-red-400 font-bold">清空舊名單</span></p>
+                        <label className="flex items-center justify-center w-full p-4 border-2 border-dashed border-slate-700 rounded-xl cursor-pointer hover:bg-slate-800/50 transition">
+                            <span className="text-sm font-bold text-blue-400">📁 點擊上傳 CSV</span>
+                            <input type="file" accept=".csv" onChange={handleCSVUpload} className="hidden" />
+                        </label>
+                    </div>
+
+                    {/* 單筆新增 */}
+                    <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl sticky top-4">
+                        <h3 className="text-lg font-bold text-white mb-4">＋ 單筆新增</h3>
+                        <form onSubmit={handleAddGuest} className="space-y-4">
+                            <div><label className="text-xs text-slate-500 uppercase font-bold">電話</label><input type="text" value={newGuest.phone} onChange={e => setNewGuest({...newGuest, phone: e.target.value})} placeholder="91234567" className="w-full p-3 rounded-lg bg-slate-800 border border-slate-700 text-white focus:outline-none"/></div>
+                            <div><label className="text-xs text-slate-500 uppercase font-bold">姓名</label><input type="text" value={newGuest.name} onChange={e => setNewGuest({...newGuest, name: e.target.value})} placeholder="陳大文" className="w-full p-3 rounded-lg bg-slate-800 border border-slate-700 text-white focus:outline-none"/></div>
+                            <div><label className="text-xs text-slate-500 uppercase font-bold text-yellow-500">座位號</label><input type="text" value={newGuest.seat} onChange={e => setNewGuest({...newGuest, seat: e.target.value})} placeholder="Table 5" className="w-full p-3 rounded-lg bg-slate-800 border border-slate-700 text-white focus:outline-none"/></div>
+                            <button type="submit" className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl transition">儲存</button>
+                        </form>
+                    </div>
+                </div>
+
+                {/* 名單列表 */}
+                <div className="md:col-span-2">
+                     <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+                        <div className="p-4 bg-slate-800/50 border-b border-slate-800 flex justify-between items-center">
+                            <span className="text-slate-400 text-sm">已匯入名單 ({guests.length} 人)</span>
+                            <button onClick={loadAllGuests} className="text-xs text-blue-400 hover:text-blue-300">↻ 重新整理</button>
+                        </div>
+                        <div className="max-h-[70vh] overflow-y-auto">
+                            <table className="w-full text-left">
+                                <thead className="bg-slate-800 text-slate-400 text-xs uppercase sticky top-0 z-10">
+                                    <tr>
+                                        <th className="p-4">姓名</th>
+                                        <th className="p-4">電話</th>
+                                        <th className="p-4">座位</th>
+                                        <th className="p-4 text-right">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-800">
+                                    {guests.map(g => (
+                                        <tr key={g.id} className="hover:bg-slate-800/50 transition">
+                                            <td className="p-4 font-bold text-white">{g.name || '-'}</td>
+                                            <td className="p-4 text-slate-400 font-mono">{g.phoneNumber}</td>
+                                            <td className="p-4 text-yellow-500 font-bold">{g.seatNumber || '-'}</td>
+                                            <td className="p-4 text-right">
+                                                <button onClick={() => handleDeleteGuest(g.id, g.name || g.phoneNumber)} className="text-slate-600 hover:text-red-500 transition px-2 py-1">🗑️</button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {guests.length === 0 && <tr><td colSpan={4} className="p-12 text-center text-slate-500">尚無資料</td></tr>}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
         )}
       </div>
 
