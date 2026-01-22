@@ -1,5 +1,4 @@
-// Force Update: Restore Guest List Tab
-
+// Force Update: Fix Duplicated Layout Code
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -182,70 +181,34 @@ export default function PhotographerPage() {
              </div>
           </div>
           {activeTab === 'photos' && (
-            // 👇 加入 items-start 防止格子被強制拉伸，這是第一道防線
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4 items-start">
-            {photos.map(photo => (
-                // 👇 外層只負責背景色和圓角，不負責定位 (移除 relative)
-                <div key={photo.id} className="group bg-slate-900 rounded-lg overflow-hidden border border-slate-800">
-                    
-                    {/* 👇 新增這一層：這就是「緊身衣」！ */}
-                    {/* 它設為 relative，讓綠框只對準這裡。它會緊貼圖片高度，不會被拉長 */}
-                    <div className="relative w-full"> 
-                        
-                        <img 
-                            src={viewMode === 'original' && photo.originalUrl ? photo.originalUrl : photo.url} 
-                            className="w-full h-auto block" // block 消除圖片底部的微小縫隙
-                            loading="lazy" 
-                        />
-                        
-                        {/* 👇 綠色 AI 框框渲染區 (完全沒變，只是被包進來了) */}
-                        {photo.faces?.map((face, i) => (
-                            <div key={i} 
-                                style={{
-                                    position: 'absolute',
-                                    left: `${face.boundingBox.x * 100}%`,
-                                    top: `${face.boundingBox.y * 100}%`,
-                                    width: `${face.boundingBox.width * 100}%`,
-                                    height: `${face.boundingBox.height * 100}%`,
-                                    border: '2px solid #00ff00', 
-                                    boxShadow: '0 0 5px #00ff00'
-                                }}
-                            >
-                                {face.person && (
-                                    <div className="absolute -top-6 left-0 bg-green-600 text-white text-[10px] px-1 rounded whitespace-nowrap z-10">
-                                        {face.person.name}
-                                    </div>
-                                )}
-                            </div>
-                        ))}
-
-                        {/* 垃圾桶按鈕也放在這裡，讓它貼著圖片右上角 */}
-                        <button onClick={() => setDeleteTargetId(photo.id)} className="absolute top-2 right-2 p-2 bg-red-600 text-white rounded-full opacity-0 group-hover:opacity-100 transition z-20">🗑️</button>
-                    
-                    </div> 
-                    {/* 👆 緊身衣結束 */}
-
+             <div className="flex gap-4">
+                <div className="flex bg-slate-900 rounded p-1 text-xs">
+                    <button onClick={() => setViewMode('original')} className={`px-3 py-1 rounded ${viewMode==='original'?'bg-slate-700 text-white':'text-slate-500'}`}>原圖</button>
+                    <button onClick={() => setViewMode('framed')} className={`px-3 py-1 rounded ${viewMode==='framed'?'bg-slate-700 text-white':'text-slate-500'}`}>合成</button>
                 </div>
-            ))}
-            </div>
-        )}{activeTab === 'photos' && (
-            // 👇 修改 1: 把 grid 改成 columns (瀑布流排版)
-            // gap-4 控制左右間距，space-y-4 控制上下間距
+                <label className={`cursor-pointer px-4 py-2 bg-green-600 rounded text-white font-bold text-sm ${uploading?'opacity-50':''}`}>
+                    {uploading ? '上傳中...' : '＋ 上傳'}
+                    <input type="file" multiple accept="image/*" onChange={handleUpload} className="hidden" disabled={uploading} />
+                </label>
+             </div>
+          )}
+        </header>
+
+        {/* 📸 照片 Tab - 修正版：只保留瀑布流 (Masonry) 排版 */}
+        {activeTab === 'photos' && (
             <div className="columns-2 md:columns-4 lg:columns-5 gap-4 space-y-4 mx-auto">
             
             {photos.map(photo => (
-                // 👇 修改 2: 加入 break-inside-avoid (防止照片被切成兩半)
-                // 移除 h-full，改用 inline-block 或 block 確保完整
                 <div key={photo.id} className="break-inside-avoid group bg-slate-900 rounded-lg overflow-hidden border border-slate-800 mb-4">
                     
                     <div className="relative w-full"> 
                         <img 
                             src={viewMode === 'original' && photo.originalUrl ? photo.originalUrl : photo.url} 
-                            className="w-full h-auto block" // 保持原比例顯示
+                            className="w-full h-auto block" 
                             loading="lazy" 
                         />
                         
-                        {/* 綠色 AI 框框 (邏輯不變) */}
+                        {/* 綠色 AI 框框 */}
                         {photo.faces?.map((face, i) => (
                             <div key={i} 
                                 style={{
@@ -274,7 +237,7 @@ export default function PhotographerPage() {
             </div>
         )}
 
-        {/* 📋 名單 Tab (我把這裡加回來了！) */}
+        {/* 📋 名單 Tab */}
         {activeTab === 'guests' && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                 <div className="md:col-span-1 space-y-6">
