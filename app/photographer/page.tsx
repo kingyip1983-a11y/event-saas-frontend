@@ -210,22 +210,52 @@ export default function PhotographerPage() {
   return (
     <main className="min-h-screen bg-slate-950 p-6 font-sans text-slate-200">
       <div className="max-w-7xl mx-auto">
-        <header className="flex justify-between items-center mb-8">
-          <div className="flex gap-4">
-             <h1 className="text-2xl font-bold text-white">工作台</h1>
-             <div className="flex bg-slate-900 rounded p-1">
-                <button onClick={() => setActiveTab('photos')} className={`px-4 py-1 rounded transition ${activeTab==='photos'?'bg-blue-600 text-white':'text-slate-400'}`}>照片</button>
-                <button onClick={() => setActiveTab('guests')} className={`px-4 py-1 rounded transition ${activeTab==='guests'?'bg-blue-600 text-white':'text-slate-400'}`}>名單</button>
+        <header className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
+          
+          {/* 第一區塊：標題 + 導航 (手機版會在第一行) */}
+          <div className="flex w-full md:w-auto justify-between md:justify-start items-center gap-4">
+             <h1 className="text-2xl font-bold text-white shrink-0">工作台</h1>
+             
+             {/* 導航按鈕 */}
+             <div className="flex bg-slate-900 rounded p-1 shrink-0">
+                <button 
+                    onClick={() => setActiveTab('photos')} 
+                    className={`px-3 py-1 text-sm rounded transition ${activeTab==='photos'?'bg-blue-600 text-white':'text-slate-400'}`}
+                >
+                    照片
+                </button>
+                <button 
+                    onClick={() => setActiveTab('guests')} 
+                    className={`px-3 py-1 text-sm rounded transition ${activeTab==='guests'?'bg-blue-600 text-white':'text-slate-400'}`}
+                >
+                    名單
+                </button>
              </div>
           </div>
+
+          {/* 第二區塊：檢視切換 + 上傳 (手機版會自動換到第二行，並撐滿寬度) */}
           {activeTab === 'photos' && (
-             <div className="flex gap-4">
-                <div className="flex bg-slate-900 rounded p-1 text-xs">
-                    <button onClick={() => setViewMode('original')} className={`px-3 py-1 rounded ${viewMode==='original'?'bg-slate-700 text-white':'text-slate-500'}`}>原圖</button>
-                    <button onClick={() => setViewMode('framed')} className={`px-3 py-1 rounded ${viewMode==='framed'?'bg-slate-700 text-white':'text-slate-500'}`}>合成</button>
+             <div className="flex w-full md:w-auto justify-between md:justify-end gap-3">
+                
+                {/* 原圖/合成 切換 */}
+                <div className="flex bg-slate-900 rounded p-1 text-xs shrink-0">
+                    <button 
+                        onClick={() => setViewMode('original')} 
+                        className={`px-3 py-2 rounded ${viewMode==='original'?'bg-slate-700 text-white':'text-slate-500'}`}
+                    >
+                        原圖
+                    </button>
+                    <button 
+                        onClick={() => setViewMode('framed')} 
+                        className={`px-3 py-2 rounded ${viewMode==='framed'?'bg-slate-700 text-white':'text-slate-500'}`}
+                    >
+                        合成
+                    </button>
                 </div>
-                <label className={`cursor-pointer px-4 py-2 bg-green-600 rounded text-white font-bold text-sm ${uploading?'opacity-50':''}`}>
-                    {uploading ? '上傳中...' : '＋ 上傳'}
+
+                {/* 上傳按鈕 (手機版讓它自動伸展 flex-1，比較好按) */}
+                <label className={`flex-1 md:flex-none cursor-pointer flex items-center justify-center px-4 py-2 bg-green-600 rounded text-white font-bold text-sm hover:bg-green-500 transition ${uploading?'opacity-50':''}`}>
+                    {uploading ? '...' : '＋ 上傳'}
                     <input type="file" multiple accept="image/*" onChange={handleUpload} className="hidden" disabled={uploading} />
                 </label>
              </div>
