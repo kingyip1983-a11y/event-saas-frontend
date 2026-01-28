@@ -157,23 +157,21 @@ export default function Home() {
                     {photos.map((photo) => (
                         <div 
                             key={photo.id} 
-                            // 這裡我們不再用 flex-col，單純做一個 relative 容器
                             className="relative group bg-slate-900 rounded-xl overflow-hidden shadow-lg border border-slate-800"
                         >
-                            {/* 照片區域 - 修改比例為 4:5 以顯示更多內容 */}
-                            <div className="relative w-full aspect-[4/5] bg-black">
+                            {/* 🛠️ 關鍵修正：
+                                1. aspect-[9/16]: 改為手機長螢幕比例 (9:16)，解決「照片被壓扁/切頭」的問題
+                                2. object-contain: 確保整張照片縮放進去，絕對不裁切 (保留紅框)
+                            */}
+                            <div className="relative w-full aspect-[9/16] bg-slate-900">
                                 <img 
                                     src={photo.url} 
-                                    className="w-full h-full object-cover" 
+                                    className="w-full h-full object-contain" 
                                     loading="lazy" 
                                     alt="Event Photo"
                                 />
 
-                                {/* 🛠️ 絕對定位按鈕列 (Absolute Overlay) */}
-                                {/* bottom-0: 釘在底部
-                                    left-0 right-0: 寬度撐滿
-                                    z-20: 保證在最上層
-                                */}
+                                {/* 🛠️ 絕對定位按鈕列 (永遠顯示) */}
                                 <div className="absolute bottom-0 left-0 right-0 z-20 flex bg-slate-900/90 backdrop-blur-md border-t border-slate-700">
                                     <button 
                                         onClick={() => downloadPhoto(photo.id, photo.originalUrl || photo.url)}
