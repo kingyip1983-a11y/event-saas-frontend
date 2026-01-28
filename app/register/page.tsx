@@ -2,7 +2,8 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation'; // 引入路由跳轉
 
-const BACKEND_URL = "https://event-saas-backend-production.up.railway.app";
+// 優先讀取環境變數，如果讀不到才用預設值 (建議預設值改為空或 Production)
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "https://event-saas-backend-production.up.railway.app";
 
 export default function RegisterPage() {
   const router = useRouter();
