@@ -61,7 +61,6 @@ export default function Home() {
 
   // 下載功能
   const downloadPhoto = async (photoId: number, url: string) => {
-    // 1. 觸發數據追蹤
     try {
         fetch(`${BACKEND_URL}/analytics/track`, {
             method: 'POST',
@@ -70,7 +69,6 @@ export default function Home() {
         });
     } catch (e) { console.error(e); }
 
-    // 2. 開啟原圖
     window.open(url, '_blank');
   };
 
@@ -95,7 +93,6 @@ export default function Home() {
                 使用 AI 人臉辨識技術，一秒鐘找出所有屬於您的活動照片。
             </p>
 
-            {/* 上傳區塊 */}
             <div className="bg-slate-900/80 backdrop-blur-md p-8 rounded-3xl shadow-2xl border border-slate-800 max-w-md mx-auto">
                 <div className="mb-6 relative w-48 h-48 mx-auto rounded-full overflow-hidden border-4 border-slate-700 bg-slate-800 shadow-inner group">
                 {previewUrl ? (
@@ -134,7 +131,6 @@ export default function Home() {
             </div>
           </div>
       ) : (
-          // 搜尋結果 Header
           <div className="sticky top-0 z-30 bg-slate-950/80 backdrop-blur-md border-b border-slate-800 px-6 py-4 flex justify-between items-center shadow-lg">
               <h2 className="text-xl font-bold flex items-center gap-2">
                   🎉 找到 {photos.length} 張
@@ -157,17 +153,13 @@ export default function Home() {
                     <button onClick={resetSearch} className="text-blue-400 hover:underline">換一張自拍試試？</button>
                 </div>
             ) : (
-                /* 🛠️ Layout 修正：
-                   1. Grid 佈局：手機 2 欄，平板 3 欄，電腦 4 欄
-                   2. Hybrid UI：手機按鈕在下方，電腦按鈕 Hover 顯示
-                */
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 pb-20">
                     {photos.map((photo) => (
                         <div 
                             key={photo.id} 
                             className="relative group bg-slate-900 rounded-xl overflow-hidden shadow-lg border border-slate-800"
                         >
-                            {/* 照片區域 - 強制統一 3:4 比例，解決不對稱 */}
+                            {/* 照片區域 - 強制統一 3:4 比例 */}
                             <div className="relative w-full aspect-[3/4] bg-slate-800">
                                 <img 
                                     src={photo.url} 
@@ -175,37 +167,18 @@ export default function Home() {
                                     loading="lazy" 
                                     alt="Event Photo"
                                 />
-                                
-                                {/* 💻 電腦版專用：懸停遮罩 (Hover Overlay) */}
-                                <div className="hidden md:flex absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex-col items-center justify-center gap-3 p-4">
-                                     <button 
-                                        onClick={() => downloadPhoto(photo.id, photo.originalUrl || photo.url)}
-                                        className="px-6 py-2 bg-white text-black font-bold rounded-full hover:bg-slate-200 transition transform hover:scale-105 shadow-xl"
-                                    >
-                                        ⬇️ 下載原圖
-                                    </button>
-                                    <button 
-                                        className="px-6 py-2 bg-slate-700 text-white font-bold rounded-full hover:bg-slate-600 transition border border-slate-500 shadow-xl"
-                                        onClick={() => {
-                                            navigator.clipboard.writeText(photo.url);
-                                            alert("連結已複製！");
-                                        }}
-                                    >
-                                        🔗 分享
-                                    </button>
-                                </div>
                             </div>
                             
-                            {/* 📱 手機版專用：下方按鈕 (Mobile Buttons) */}
-                            <div className="md:hidden grid grid-cols-2 gap-px bg-slate-700 border-t border-slate-700">
+                            {/* 🛠️ 按鈕區域 (統一版)：無論手機或電腦，永遠顯示在下方 */}
+                            <div className="grid grid-cols-2 gap-px bg-slate-700 border-t border-slate-700">
                                 <button 
                                     onClick={() => downloadPhoto(photo.id, photo.originalUrl || photo.url)}
-                                    className="py-3 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold transition flex items-center justify-center gap-1 active:bg-slate-600"
+                                    className="py-3 bg-slate-800 hover:bg-slate-700 text-white text-xs md:text-sm font-bold transition flex items-center justify-center gap-2 active:bg-slate-600 group-hover:bg-slate-700"
                                 >
                                     ⬇️ 下載
                                 </button>
                                 <button 
-                                    className="py-3 bg-slate-800 hover:bg-slate-700 text-blue-400 text-xs font-bold transition flex items-center justify-center gap-1 border-l border-slate-700 active:bg-slate-600"
+                                    className="py-3 bg-slate-800 hover:bg-slate-700 text-blue-400 text-xs md:text-sm font-bold transition flex items-center justify-center gap-2 border-l border-slate-700 active:bg-slate-600 group-hover:bg-slate-700"
                                     onClick={() => {
                                         if (navigator.share) {
                                             navigator.share({ title: '我的照片', url: photo.url }).catch(console.error);
