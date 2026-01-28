@@ -159,37 +159,54 @@ export default function Home() {
             ) : (
                 // 🛠️ 瀑布流 Layout 修正：加入 gap-4 和 column 設定
                 <div className="columns-2 md:columns-3 lg:columns-4 gap-4 space-y-4">
-                    {photos.map((photo) => (
-                        <div 
-                            key={photo.id} 
-                            // 🛠️ 關鍵修正：break-inside-avoid 防止被切斷，mb-4 增加垂直間距
-                            className="break-inside-avoid mb-4 bg-slate-900 rounded-xl overflow-hidden shadow-lg border border-slate-800 flex flex-col"
-                        >
-                            {/* 照片本體 */}
-                            <img 
-                                src={photo.url} 
-                                className="w-full h-auto block" 
-                                loading="lazy" 
-                                alt="Event Photo"
-                            />
-                            
-                            {/* 🛠️ 按鈕區域：移到照片下方，永遠顯示 (解決手機無法 Hover 問題) */}
-                            <div className="p-3 grid grid-cols-2 gap-2 bg-slate-800/50">
-                                <button 
-                                    onClick={() => downloadPhoto(photo.id, photo.originalUrl || photo.url)}
-                                    className="flex items-center justify-center py-2 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold rounded-lg transition"
-                                >
-                                    ⬇️ 下載
-                                </button>
-                                <button 
-                                    className="flex items-center justify-center py-2 bg-blue-600/20 text-blue-400 border border-blue-500/30 text-xs font-bold rounded-lg"
-                                    onClick={() => alert("請長按照片或使用瀏覽器分享功能")}
-                                >
-                                    🔗 分享
-                                </button>
-                            </div>
-                        </div>
-                    ))}
+                  {/* 🛠️ 改用 Grid 系統：保證左一張、右一張，整齊對稱 */}
+<div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+    {photos.map((photo) => (
+        <div 
+            key={photo.id} 
+            className="relative group bg-slate-900 rounded-xl overflow-hidden shadow-lg border border-slate-800 flex flex-col"
+        >
+            {/* 照片區域 */}
+            <div className="relative">
+                <img 
+                    src={photo.url} 
+                    className="w-full h-auto block object-cover" 
+                    loading="lazy" 
+                    alt="Event Photo"
+                />
+            </div>
+            
+            {/* 按鈕區域：調整間距讓它在小螢幕也好看 */}
+            <div className="p-2 grid grid-cols-2 gap-2 bg-slate-800 border-t border-slate-700">
+                <button 
+                    onClick={() => downloadPhoto(photo.id, photo.originalUrl || photo.url)}
+                    className="flex items-center justify-center py-2 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold rounded-lg transition active:scale-95"
+                >
+                    ⬇️ 下載
+                </button>
+                <button 
+                    className="flex items-center justify-center py-2 bg-blue-600/20 text-blue-400 border border-blue-500/30 text-xs font-bold rounded-lg active:scale-95"
+                    onClick={() => {
+                        // 簡單的分享功能
+                        if (navigator.share) {
+                            navigator.share({
+                                title: '我的活動照片',
+                                text: '快來看看我的照片！',
+                                url: photo.url
+                            }).catch(console.error);
+                        } else {
+                            // 備案：複製連結
+                            navigator.clipboard.writeText(photo.url);
+                            alert("連結已複製！");
+                        }
+                    }}
+                >
+                    🔗 分享
+                </button>
+            </div>
+        </div>
+    ))}
+</div>
                 </div>
             )}
         </div>
