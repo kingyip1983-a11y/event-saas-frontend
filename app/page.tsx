@@ -157,28 +157,33 @@ export default function Home() {
                     {photos.map((photo) => (
                         <div 
                             key={photo.id} 
-                            className="relative group bg-slate-900 rounded-xl overflow-hidden shadow-lg border border-slate-800"
+                            // ⚠️ 注意這裡：flex flex-col 確保按鈕被擠到下面
+                            className="bg-slate-900 rounded-xl overflow-hidden shadow-lg border border-slate-800 flex flex-col"
                         >
                             {/* 照片區域 - 強制統一 3:4 比例 */}
-                            <div className="relative w-full aspect-[3/4] bg-slate-800">
+                            <div className="relative w-full aspect-[3/4] bg-black">
                                 <img 
                                     src={photo.url} 
-                                    className="w-full h-full object-cover transition duration-500 group-hover:scale-105" 
+                                    className="w-full h-full object-cover transition duration-500 hover:opacity-90" 
                                     loading="lazy" 
                                     alt="Event Photo"
                                 />
                             </div>
                             
-                            {/* 🛠️ 按鈕區域 (統一版)：無論手機或電腦，永遠顯示在下方 */}
-                            <div className="grid grid-cols-2 gap-px bg-slate-700 border-t border-slate-700">
+                            {/* 🛠️ 按鈕區域 (絕對修復版) 
+                                1. 移除了 position: absolute，改成普通的 div，保證佔據空間
+                                2. 移除了所有 hidden 屬性
+                                3. 加了 z-10 確保在最上層
+                            */}
+                            <div className="grid grid-cols-2 gap-px bg-slate-700 border-t border-slate-700 z-10">
                                 <button 
                                     onClick={() => downloadPhoto(photo.id, photo.originalUrl || photo.url)}
-                                    className="py-3 bg-slate-800 hover:bg-slate-700 text-white text-xs md:text-sm font-bold transition flex items-center justify-center gap-2 active:bg-slate-600 group-hover:bg-slate-700"
+                                    className="py-4 bg-slate-800 hover:bg-slate-700 text-white text-sm font-bold transition flex items-center justify-center gap-2 active:bg-slate-600"
                                 >
                                     ⬇️ 下載
                                 </button>
                                 <button 
-                                    className="py-3 bg-slate-800 hover:bg-slate-700 text-blue-400 text-xs md:text-sm font-bold transition flex items-center justify-center gap-2 border-l border-slate-700 active:bg-slate-600 group-hover:bg-slate-700"
+                                    className="py-4 bg-slate-800 hover:bg-slate-700 text-blue-400 text-sm font-bold transition flex items-center justify-center gap-2 border-l border-slate-700 active:bg-slate-600"
                                     onClick={() => {
                                         if (navigator.share) {
                                             navigator.share({ title: '我的照片', url: photo.url }).catch(console.error);
