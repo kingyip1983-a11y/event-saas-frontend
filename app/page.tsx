@@ -157,44 +157,45 @@ export default function Home() {
                     {photos.map((photo) => (
                         <div 
                             key={photo.id} 
-                            // ⚠️ 注意這裡：flex flex-col 確保按鈕被擠到下面
-                            className="bg-slate-900 rounded-xl overflow-hidden shadow-lg border border-slate-800 flex flex-col"
+                            // 這裡我們不再用 flex-col，單純做一個 relative 容器
+                            className="relative group bg-slate-900 rounded-xl overflow-hidden shadow-lg border border-slate-800"
                         >
-                            {/* 照片區域 - 強制統一 3:4 比例 */}
+                            {/* 照片區域 - 3:4 比例 */}
                             <div className="relative w-full aspect-[3/4] bg-black">
                                 <img 
                                     src={photo.url} 
-                                    className="w-full h-full object-cover transition duration-500 hover:opacity-90" 
+                                    className="w-full h-full object-cover" 
                                     loading="lazy" 
                                     alt="Event Photo"
                                 />
-                            </div>
-                            
-                            {/* 🛠️ 按鈕區域 (絕對修復版) 
-                                1. 移除了 position: absolute，改成普通的 div，保證佔據空間
-                                2. 移除了所有 hidden 屬性
-                                3. 加了 z-10 確保在最上層
-                            */}
-                            <div className="grid grid-cols-2 gap-px bg-slate-700 border-t border-slate-700 z-10">
-                                <button 
-                                    onClick={() => downloadPhoto(photo.id, photo.originalUrl || photo.url)}
-                                    className="py-4 bg-slate-800 hover:bg-slate-700 text-white text-sm font-bold transition flex items-center justify-center gap-2 active:bg-slate-600"
-                                >
-                                    ⬇️ 下載
-                                </button>
-                                <button 
-                                    className="py-4 bg-slate-800 hover:bg-slate-700 text-blue-400 text-sm font-bold transition flex items-center justify-center gap-2 border-l border-slate-700 active:bg-slate-600"
-                                    onClick={() => {
-                                        if (navigator.share) {
-                                            navigator.share({ title: '我的照片', url: photo.url }).catch(console.error);
-                                        } else {
-                                            navigator.clipboard.writeText(photo.url);
-                                            alert("已複製");
-                                        }
-                                    }}
-                                >
-                                    🔗 分享
-                                </button>
+
+                                {/* 🛠️ 絕對定位按鈕列 (Absolute Overlay) */}
+                                {/* bottom-0: 釘在底部
+                                    left-0 right-0: 寬度撐滿
+                                    z-20: 保證在最上層
+                                */}
+                                <div className="absolute bottom-0 left-0 right-0 z-20 flex bg-slate-900/90 backdrop-blur-md border-t border-slate-700">
+                                    <button 
+                                        onClick={() => downloadPhoto(photo.id, photo.originalUrl || photo.url)}
+                                        className="flex-1 py-4 text-white text-sm font-bold hover:bg-slate-800 transition flex items-center justify-center gap-2"
+                                    >
+                                        ⬇️ 下載
+                                    </button>
+                                    <div className="w-px bg-slate-700 my-2"></div>
+                                    <button 
+                                        className="flex-1 py-4 text-blue-400 text-sm font-bold hover:bg-slate-800 transition flex items-center justify-center gap-2"
+                                        onClick={() => {
+                                            if (navigator.share) {
+                                                navigator.share({ title: '我的照片', url: photo.url }).catch(console.error);
+                                            } else {
+                                                navigator.clipboard.writeText(photo.url);
+                                                alert("已複製");
+                                            }
+                                        }}
+                                    >
+                                        🔗 分享
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     ))}
