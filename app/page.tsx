@@ -160,8 +160,8 @@ export default function Home() {
                             // 這裡我們不再用 flex-col，單純做一個 relative 容器
                             className="relative group bg-slate-900 rounded-xl overflow-hidden shadow-lg border border-slate-800"
                         >
-                            {/* 照片區域 - 3:4 比例 */}
-                            <div className="relative w-full aspect-[3/4] bg-black">
+                            {/* 照片區域 - 修改比例為 4:5 以顯示更多內容 */}
+                            <div className="relative w-full aspect-[4/5] bg-black">
                                 <img 
                                     src={photo.url} 
                                     className="w-full h-full object-cover" 
