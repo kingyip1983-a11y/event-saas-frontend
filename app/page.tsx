@@ -70,7 +70,7 @@ export default function Home() {
         });
     } catch (e) { console.error(e); }
 
-    // 2. 開啟原圖 (讓使用者長按儲存或直接下載)
+    // 2. 開啟原圖
     window.open(url, '_blank');
   };
 
@@ -148,7 +148,7 @@ export default function Home() {
           </div>
       )}
 
-      {/* 搜尋結果列表 (Layout Fix) */}
+      {/* 搜尋結果列表 */}
       {searched && (
         <div className="max-w-7xl mx-auto px-4 mt-6">
             {photos.length === 0 ? (
@@ -157,56 +157,69 @@ export default function Home() {
                     <button onClick={resetSearch} className="text-blue-400 hover:underline">換一張自拍試試？</button>
                 </div>
             ) : (
-                // 🛠️ 瀑布流 Layout 修正：加入 gap-4 和 column 設定
-                <div className="columns-2 md:columns-3 lg:columns-4 gap-4 space-y-4">
-                  {/* 🛠️ 改用 Grid 系統：保證左一張、右一張，整齊對稱 */}
-<div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-    {photos.map((photo) => (
-        <div 
-            key={photo.id} 
-            className="relative group bg-slate-900 rounded-xl overflow-hidden shadow-lg border border-slate-800 flex flex-col"
-        >
-            {/* 照片區域 */}
-            <div className="relative">
-                <img 
-                    src={photo.url} 
-                    className="w-full h-auto block object-cover" 
-                    loading="lazy" 
-                    alt="Event Photo"
-                />
-            </div>
-            
-            {/* 按鈕區域：調整間距讓它在小螢幕也好看 */}
-            <div className="p-2 grid grid-cols-2 gap-2 bg-slate-800 border-t border-slate-700">
-                <button 
-                    onClick={() => downloadPhoto(photo.id, photo.originalUrl || photo.url)}
-                    className="flex items-center justify-center py-2 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold rounded-lg transition active:scale-95"
-                >
-                    ⬇️ 下載
-                </button>
-                <button 
-                    className="flex items-center justify-center py-2 bg-blue-600/20 text-blue-400 border border-blue-500/30 text-xs font-bold rounded-lg active:scale-95"
-                    onClick={() => {
-                        // 簡單的分享功能
-                        if (navigator.share) {
-                            navigator.share({
-                                title: '我的活動照片',
-                                text: '快來看看我的照片！',
-                                url: photo.url
-                            }).catch(console.error);
-                        } else {
-                            // 備案：複製連結
-                            navigator.clipboard.writeText(photo.url);
-                            alert("連結已複製！");
-                        }
-                    }}
-                >
-                    🔗 分享
-                </button>
-            </div>
-        </div>
-    ))}
-</div>
+                /* 🛠️ Layout 修正：
+                   1. Grid 佈局：手機 2 欄，平板 3 欄，電腦 4 欄
+                   2. Hybrid UI：手機按鈕在下方，電腦按鈕 Hover 顯示
+                */
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 pb-20">
+                    {photos.map((photo) => (
+                        <div 
+                            key={photo.id} 
+                            className="relative group bg-slate-900 rounded-xl overflow-hidden shadow-lg border border-slate-800"
+                        >
+                            {/* 照片區域 - 強制統一 3:4 比例，解決不對稱 */}
+                            <div className="relative w-full aspect-[3/4] bg-slate-800">
+                                <img 
+                                    src={photo.url} 
+                                    className="w-full h-full object-cover transition duration-500 group-hover:scale-105" 
+                                    loading="lazy" 
+                                    alt="Event Photo"
+                                />
+                                
+                                {/* 💻 電腦版專用：懸停遮罩 (Hover Overlay) */}
+                                <div className="hidden md:flex absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex-col items-center justify-center gap-3 p-4">
+                                     <button 
+                                        onClick={() => downloadPhoto(photo.id, photo.originalUrl || photo.url)}
+                                        className="px-6 py-2 bg-white text-black font-bold rounded-full hover:bg-slate-200 transition transform hover:scale-105 shadow-xl"
+                                    >
+                                        ⬇️ 下載原圖
+                                    </button>
+                                    <button 
+                                        className="px-6 py-2 bg-slate-700 text-white font-bold rounded-full hover:bg-slate-600 transition border border-slate-500 shadow-xl"
+                                        onClick={() => {
+                                            navigator.clipboard.writeText(photo.url);
+                                            alert("連結已複製！");
+                                        }}
+                                    >
+                                        🔗 分享
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            {/* 📱 手機版專用：下方按鈕 (Mobile Buttons) */}
+                            <div className="md:hidden grid grid-cols-2 gap-px bg-slate-700 border-t border-slate-700">
+                                <button 
+                                    onClick={() => downloadPhoto(photo.id, photo.originalUrl || photo.url)}
+                                    className="py-3 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold transition flex items-center justify-center gap-1 active:bg-slate-600"
+                                >
+                                    ⬇️ 下載
+                                </button>
+                                <button 
+                                    className="py-3 bg-slate-800 hover:bg-slate-700 text-blue-400 text-xs font-bold transition flex items-center justify-center gap-1 border-l border-slate-700 active:bg-slate-600"
+                                    onClick={() => {
+                                        if (navigator.share) {
+                                            navigator.share({ title: '我的照片', url: photo.url }).catch(console.error);
+                                        } else {
+                                            navigator.clipboard.writeText(photo.url);
+                                            alert("已複製");
+                                        }
+                                    }}
+                                >
+                                    🔗 分享
+                                </button>
+                            </div>
+                        </div>
+                    ))}
                 </div>
             )}
         </div>
