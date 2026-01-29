@@ -181,18 +181,29 @@ export default function Home() {
                                     </button>
                                     <div className="w-px bg-slate-700 my-2"></div>
                                     <button 
-                                        className="flex-1 py-4 text-blue-400 text-sm font-bold hover:bg-slate-800 transition flex items-center justify-center gap-2"
-                                        onClick={() => {
-                                            if (navigator.share) {
-                                                navigator.share({ title: '我的照片', url: photo.url }).catch(console.error);
-                                            } else {
-                                                navigator.clipboard.writeText(photo.url);
-                                                alert("已複製");
-                                            }
-                                        }}
-                                    >
-                                        🔗 分享
-                                    </button>
+                                      className="flex-1 py-4 text-blue-400 text-sm font-bold hover:bg-slate-800 transition flex items-center justify-center gap-2"
+                                      onClick={() => {
+                                          // 1. 🔥 [修正] 先觸發數據追蹤 (不管最後有沒有分享成功，點了就算)
+                                          try {
+                                              fetch(`${BACKEND_URL}/analytics/track`, {
+                                                  method: 'POST',
+                                                  headers: { 'Content-Type': 'application/json' },
+                                                  body: JSON.stringify({ photoId: photo.id, type: 'SHARE' })
+                                              });
+                                          } catch (e) { console.error(e); }
+
+                                          // 2. 喚起原生分享選單
+                                          if (navigator.share) {
+                                              navigator.share({ title: '我的活動照片', url: photo.url }).catch(console.error);
+                                          } else {
+                                              // 電腦版備案：複製連結
+                                              navigator.clipboard.writeText(photo.url);
+                                              alert("連結已複製！(這也算一次分享)");
+                                          }
+                                      }}
+                                  >
+                                      🔗 分享
+                                  </button>
                                 </div>
                             </div>
                         </div>
