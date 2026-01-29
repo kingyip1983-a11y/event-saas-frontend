@@ -120,7 +120,7 @@ export default function RegisterPage() {
                 value={name} 
                 onChange={e => setName(e.target.value)} 
                 className="w-full bg-slate-700 border border-slate-600 focus:border-blue-500 rounded-xl px-4 py-3 outline-none transition placeholder-slate-500" 
-                placeholder="例如: King Yip" 
+                placeholder="例如: Johnny Depp" 
             />
           </div>
 
