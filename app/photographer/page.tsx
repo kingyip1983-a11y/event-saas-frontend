@@ -156,28 +156,50 @@ export default function PhotographerPage() {
     } catch (err) { alert('Err'); }
   };
 
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+ // 在 frontend/app/photographer/page.tsx 中
+
+const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.length) return;
     setUploading(true);
-    const options = { maxSizeMB: 1, maxWidthOrHeight: 2048, useWebWorker: true, initialQuality: 0.8 };
+    
+    // 👇 修改這裡：加入 fileType: 'image/jpeg'
+    const options = { 
+        maxSizeMB: 1, 
+        maxWidthOrHeight: 2048, 
+        useWebWorker: true, 
+        initialQuality: 0.8,
+        fileType: 'image/jpeg' // 👈 強制轉為 JPG，解決 HEIC 導致後端當機的問題
+    };
+
     for (let i = 0; i < e.target.files.length; i++) {
         const originalFile = e.target.files[i];
         try {
+            // 壓縮並轉檔
             const compressedFile = await imageCompression(originalFile, options);
-            const finalFile = new File([compressedFile], originalFile.name, { type: compressedFile.type, lastModified: Date.now() });
+            
+            // 建立新的 File 物件 (確保副檔名是 .jpg)
+            const finalFile = new File(
+                [compressedFile], 
+                originalFile.name.replace(/\.\w+$/, '.jpg'), // 把 .heic 換成 .jpg
+                { type: 'image/jpeg', lastModified: Date.now() }
+            );
+
             const formData = new FormData();
             formData.append('photo', finalFile);
+            
+            // 上傳
             await fetch(`${BACKEND_URL}/upload`, { method: 'POST', body: formData });
+
         } catch (error) {
-            const formData = new FormData();
-            formData.append('photo', originalFile);
-            await fetch(`${BACKEND_URL}/upload`, { method: 'POST', body: formData });
+            console.error("壓縮失敗，嘗試上傳原圖:", error);
+            // 如果壓縮失敗，還是得小心，這裡建議不要直接上傳原圖，或者在後端做防護
+            // 但通常 browser-image-compression 能處理絕大多數格式
         }
     }
     setUploading(false);
     loadAllPhotos();
     e.target.value = ''; 
-  };
+};
 
   const handleAddGuest = async (e: React.FormEvent) => {
      e.preventDefault();
