@@ -3,7 +3,7 @@
 import { useState, useRef } from 'react';
 import Link from 'next/link';
 
-// 🔌 雙重變數偵測 (統一管理後端網址)
+// 🔌 雙重變數偵測
 const BACKEND_URL = 
   process.env.NEXT_PUBLIC_BACKEND_URL || 
   process.env.NEXT_PUBLIC_API_URL || 
@@ -59,7 +59,6 @@ export default function Home() {
     }
   };
 
-  // 重置搜尋
   const resetSearch = () => {
       setSelectedImage(null);
       setPreviewUrl(null);
@@ -67,28 +66,19 @@ export default function Home() {
       setPhotos([]);
   };
 
-  // ⬇️ [核心功能] 強制下載 (後端代理模式)
-  // 這段代碼本身是完美的，前提是後端必須有對應的接口
+  // ⬇️ [強制下載] 呼叫後端代理，解決 CORS 與數據問題
   const handleDirectDownload = (e: React.MouseEvent, photo: any) => {
-    // 🛑 1. 阻止事件冒泡 (防止觸發圖片預覽)
     e.stopPropagation(); 
     e.preventDefault();
-
-    // 🔗 2. 組合後端代理網址
-    // 原理：直接讓瀏覽器訪問這個網址，後端會回傳 "Attachment" 標頭，
-    // 瀏覽器收到後會自動開始下載，而不會跳轉頁面。
     const downloadUrl = `${BACKEND_URL}/photos/${photo.id}/download-proxy`;
-    
     console.log(`📥 啟動下載: ${downloadUrl}`);
-
-    // 📥 3. 觸發原生下載
     window.location.href = downloadUrl;
   };
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-10">
       
-      {/* Header / Hero Area */}
+      {/* Header Area */}
       {!searched ? (
           <div className="max-w-7xl mx-auto px-6 py-12 md:py-20 text-center">
             <h1 className="text-4xl md:text-6xl font-extrabold mb-6 tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-400">
@@ -140,10 +130,7 @@ export default function Home() {
               <h2 className="text-xl font-bold flex items-center gap-2">
                   🎉 找到 {photos.length} 張
               </h2>
-              <button 
-                  onClick={resetSearch}
-                  className="px-4 py-2 bg-slate-800 rounded-lg text-sm text-slate-300 hover:bg-slate-700 transition"
-              >
+              <button onClick={resetSearch} className="px-4 py-2 bg-slate-800 rounded-lg text-sm text-slate-300 hover:bg-slate-700 transition">
                   🔄 重新搜尋
               </button>
           </div>
@@ -160,22 +147,37 @@ export default function Home() {
             ) : (
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 pb-20">
                     {photos.map((photo) => (
-                        <div 
-                            key={photo.id} 
-                            className="relative group bg-slate-900 rounded-xl overflow-hidden shadow-lg border border-slate-800"
-                        >
+                        <div key={photo.id} className="relative group bg-slate-900 rounded-xl overflow-hidden shadow-lg border border-slate-800">
                             <div className="relative w-full aspect-[9/16] bg-slate-900">
-                                <img 
-                                    src={photo.url} 
-                                    className="w-full h-full object-contain" 
-                                    loading="lazy" 
-                                    alt="Event Photo"
-                                />
+                                
+                                <img src={photo.url} className="w-full h-full object-contain" loading="lazy" alt="Event Photo" />
 
-                                {/* 🛠️ 絕對定位按鈕列 */}
+                                {/* 🟩 [新功能] 繪製 AI 辨識出的綠色框框 */}
+                                {photo.faces && photo.faces.map((face: any, i: number) => {
+                                    // 確保 boundingBox 存在且格式正確
+                                    if (!face.boundingBox) return null;
+                                    const { x, y, width, height } = face.boundingBox;
+                                    return (
+                                        <div
+                                            key={i}
+                                            style={{
+                                                position: 'absolute',
+                                                left: `${x * 100}%`,
+                                                top: `${y * 100}%`,
+                                                width: `${width * 100}%`,
+                                                height: `${height * 100}%`,
+                                                border: '2px solid #10b981', // 漂亮的綠色
+                                                boxShadow: '0 0 8px rgba(16, 185, 129, 0.5)',
+                                                borderRadius: '4px',
+                                                pointerEvents: 'none' // 確保框框不會擋住點擊
+                                            }}
+                                        />
+                                    );
+                                })}
+
+                                {/* 按鈕列 */}
                                 <div className="absolute bottom-0 left-0 right-0 z-20 flex bg-slate-900/90 backdrop-blur-md border-t border-slate-700">
                                     <button 
-                                        // 👇 使用優化後的下載函式
                                         onClick={(e) => handleDirectDownload(e, photo)}
                                         className="flex-1 py-4 text-white text-sm font-bold hover:bg-slate-800 transition flex items-center justify-center gap-2"
                                     >
@@ -197,7 +199,7 @@ export default function Home() {
                                               navigator.share({ title: '我的活動照片', url: photo.url }).catch(console.error);
                                           } else {
                                               navigator.clipboard.writeText(photo.url);
-                                              alert("連結已複製！(這也算一次分享)");
+                                              alert("連結已複製！");
                                           }
                                       }}
                                   >
