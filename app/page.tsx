@@ -3,7 +3,7 @@
 import { useState, useRef } from 'react';
 import Link from 'next/link';
 
-// 🔌 雙重變數偵測
+// 🔌 雙重變數偵測 (統一管理後端網址)
 const BACKEND_URL = 
   process.env.NEXT_PUBLIC_BACKEND_URL || 
   process.env.NEXT_PUBLIC_API_URL || 
@@ -59,25 +59,58 @@ export default function Home() {
     }
   };
 
-  // 下載功能
-  const downloadPhoto = async (photoId: number, url: string) => {
-    try {
-        fetch(`${BACKEND_URL}/analytics/track`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ photoId, type: 'DOWNLOAD' })
-        });
-    } catch (e) { console.error(e); }
-
-    window.open(url, '_blank');
-  };
-
   // 重置搜尋
   const resetSearch = () => {
       setSelectedImage(null);
       setPreviewUrl(null);
       setSearched(false);
       setPhotos([]);
+  };
+
+  // ⬇️ [新功能] 強制下載並統計次數
+  const handleDirectDownload = async (e: React.MouseEvent, photo: any) => {
+    // 🛑 1. 阻止事件冒泡 (防止觸發原本的點擊看大圖)
+    e.stopPropagation(); 
+    e.preventDefault();
+
+    try {
+        // 📊 2. 通知後端更新下載次數 (使用最上方定義的 BACKEND_URL)
+        fetch(`${BACKEND_URL}/photos/${photo.id}/download`, { method: 'POST' })
+            .catch(err => console.error("統計更新失敗", err));
+
+        // 📥 3. 開始下載流程
+        console.log("正在準備下載...", photo.url);
+        
+        // 使用 fetch 抓取圖片資料 (避開瀏覽器直接打開圖片的行為)
+        const response = await fetch(photo.url);
+        if (!response.ok) throw new Error('Network response was not ok');
+        
+        const blob = await response.blob(); // 轉成二進制物件
+        const blobUrl = window.URL.createObjectURL(blob);
+        
+        // 建立一個隱藏的下載連結並自動點擊
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        
+        // 🧹 清理檔名 (移除 Luma 可能留下的 ID 標記，只留原始檔名)
+        const cleanName = photo.fileName && photo.fileName.includes('|') 
+            ? photo.fileName.split('|').pop() 
+            : (photo.fileName || `photo-${photo.id}.jpg`);
+            
+        link.download = cleanName; 
+        
+        document.body.appendChild(link);
+        link.click(); // 模擬點擊
+        document.body.removeChild(link);
+        
+        // 清除記憶體
+        window.URL.revokeObjectURL(blobUrl);
+
+    } catch (error) {
+        console.error("下載失敗:", error);
+        // 備案：如果 fetch 失敗 (例如 CORS 問題)，則退回「開新視窗」的方式
+        window.open(photo.url, '_blank');
+    }
   };
 
   return (
@@ -159,10 +192,6 @@ export default function Home() {
                             key={photo.id} 
                             className="relative group bg-slate-900 rounded-xl overflow-hidden shadow-lg border border-slate-800"
                         >
-                            {/* 🛠️ 關鍵修正：
-                                1. aspect-[9/16]: 改為手機長螢幕比例 (9:16)，解決「照片被壓扁/切頭」的問題
-                                2. object-contain: 確保整張照片縮放進去，絕對不裁切 (保留紅框)
-                            */}
                             <div className="relative w-full aspect-[9/16] bg-slate-900">
                                 <img 
                                     src={photo.url} 
@@ -174,7 +203,8 @@ export default function Home() {
                                 {/* 🛠️ 絕對定位按鈕列 (永遠顯示) */}
                                 <div className="absolute bottom-0 left-0 right-0 z-20 flex bg-slate-900/90 backdrop-blur-md border-t border-slate-700">
                                     <button 
-                                        onClick={() => downloadPhoto(photo.id, photo.originalUrl || photo.url)}
+                                        // 👇 [修正] 改用 handleDirectDownload，並傳入事件 e
+                                        onClick={(e) => handleDirectDownload(e, photo)}
                                         className="flex-1 py-4 text-white text-sm font-bold hover:bg-slate-800 transition flex items-center justify-center gap-2"
                                     >
                                         ⬇️ 下載
@@ -183,7 +213,6 @@ export default function Home() {
                                     <button 
                                       className="flex-1 py-4 text-blue-400 text-sm font-bold hover:bg-slate-800 transition flex items-center justify-center gap-2"
                                       onClick={() => {
-                                          // 1. 🔥 [修正] 先觸發數據追蹤 (不管最後有沒有分享成功，點了就算)
                                           try {
                                               fetch(`${BACKEND_URL}/analytics/track`, {
                                                   method: 'POST',
@@ -192,11 +221,9 @@ export default function Home() {
                                               });
                                           } catch (e) { console.error(e); }
 
-                                          // 2. 喚起原生分享選單
                                           if (navigator.share) {
                                               navigator.share({ title: '我的活動照片', url: photo.url }).catch(console.error);
                                           } else {
-                                              // 電腦版備案：複製連結
                                               navigator.clipboard.writeText(photo.url);
                                               alert("連結已複製！(這也算一次分享)");
                                           }
