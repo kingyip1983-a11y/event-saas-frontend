@@ -22,6 +22,7 @@ interface Photo {
     originalUrl?: string; 
     status: string; 
     faces?: Face[];
+    // 確保後端回傳的資料包含這些欄位，或者前端預設為 null
     videoStatus?: 'PROCESSING' | 'COMPLETED' | 'FAILED' | null;
     videoUrl?: string;
 }
@@ -33,35 +34,45 @@ export default function PhotographerPage() {
   const [passwordInput, setPasswordInput] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
-  // 2. SaaS 功能開關 (Super Admin Control)
-  // 預設為 false，開啟後才會出現 AI 相關功能
+  // 2. SaaS 功能開關 (Feature Flag)
+  // 您可以暫時將預設值改成 true 來測試： useState(true)
   const [isAiFeatureEnabled, setIsAiFeatureEnabled] = useState(false);
 
-  // 3. 頁面與資料狀態
-  // 新增 'ai_video' 分頁類型
+  // 3. 頁面導覽狀態
   const [activeTab, setActiveTab] = useState<'photos' | 'guests' | 'stats' | 'ai_video'>('photos');
+  
+  // 4. 資料狀態
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [guests, setGuests] = useState<Person[]>([]);
   const [stats, setStats] = useState({ totalPhotos: 0, totalDownloads: 0, totalShares: 0 });
   
-  // 4. 操作狀態
+  // 5. 操作狀態
   const [uploading, setUploading] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<'framed' | 'original'>('framed');
   const [newGuest, setNewGuest] = useState({ name: '', phone: '', seat: '' });
 
-  // 5. AI 影片播放器狀態
+  // 6. AI 影片播放器狀態
   const [selectedVideoId, setSelectedVideoId] = useState<number | null>(null);
 
-  // --- 計算屬性：篩選出有影片的照片 ---
+  // --- 計算屬性：篩選出「有影片相關狀態」的照片 ---
+  // 這就是您的「影片存檔」列表來源
   const videoPhotos = useMemo(() => {
-    return photos.filter(p => p.videoStatus === 'PROCESSING' || p.videoStatus === 'COMPLETED' || p.videoStatus === 'FAILED');
+    return photos.filter(p => 
+        p.videoStatus === 'PROCESSING' || 
+        p.videoStatus === 'COMPLETED' || 
+        p.videoStatus === 'FAILED'
+    );
   }, [photos]);
 
-  // 當前播放的影片物件
+  // 當前播放器要顯示的內容
   const currentVideoPhoto = useMemo(() => {
-      if (!selectedVideoId) return videoPhotos.length > 0 ? videoPhotos[0] : null;
-      return videoPhotos.find(p => p.id === selectedVideoId) || null;
+      // 如果用戶選了某個影片，就顯示那個
+      if (selectedVideoId) {
+          return videoPhotos.find(p => p.id === selectedVideoId) || null;
+      }
+      // 否則預設顯示列表中的第一個
+      return videoPhotos.length > 0 ? videoPhotos[0] : null;
   }, [selectedVideoId, videoPhotos]);
 
 
@@ -95,28 +106,33 @@ export default function PhotographerPage() {
     // 影片生成完成監聽
     socket.on('video_ready', ({ photoId, videoUrl }: { photoId: number, videoUrl: string }) => { 
         setPhotos(prev => prev.map(p => p.id === photoId ? { ...p, videoStatus: 'COMPLETED', videoUrl } : p)); 
-        // 如果使用者正在看 AI 頁面且沒有選中影片，自動選中剛完成的這個
-        if (!selectedVideoId) setSelectedVideoId(photoId);
+        // 當影片完成時，如果用戶在 AI 頁面，自動選中該影片
+        if (activeTab === 'ai_video') {
+            setSelectedVideoId(photoId);
+        }
     });
 
     return () => { socket.off('new_photo_ready'); socket.off('photo_deleted'); socket.off('video_ready'); };
-  }, [isAuthenticated, selectedVideoId]);
+  }, [isAuthenticated, activeTab]);
 
   const handleDirectDownload = (e: React.MouseEvent, photo: Photo) => { e.stopPropagation(); e.preventDefault(); window.location.href = `${BACKEND_URL}/photos/${photo.id}/download-proxy`; };
   const handleShare = async (e: React.MouseEvent, photo: Photo) => { e.stopPropagation(); e.preventDefault(); try { fetch(`${BACKEND_URL}/analytics/track`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ photoId: photo.id, type: 'SHARE' }) }); } catch (e) {} if (navigator.share) { navigator.share({ title: '活動照片', url: photo.url }).catch(console.error); } else { navigator.clipboard.writeText(photo.url); alert("連結已複製！"); } };
   
+  // --- 關鍵修改：點擊做影片後，自動切換分頁 ---
   const handleGenerateVideo = async (e: React.MouseEvent, photo: Photo) => { 
       e.stopPropagation(); e.preventDefault(); 
       if (photo.videoStatus === 'PROCESSING') return; 
       
-      // UI 先顯示製作中
+      // 1. UI 狀態更新：標記為製作中
       setPhotos(prev => prev.map(p => p.id === photo.id ? { ...p, videoStatus: 'PROCESSING' } : p)); 
       
+      // 2. 自動切換到 AI 影片分頁，讓用戶知道東西去哪了
+      setActiveTab('ai_video');
+      setSelectedVideoId(photo.id);
+
       try { 
           const res = await fetch(`${BACKEND_URL}/photos/generate-video`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ photoId: photo.id }) }); 
           if (!res.ok) throw new Error("API Error"); 
-          // 提示用戶去 AI 分頁查看
-          alert("請求已發送！請至「AI 影片」分頁查看進度。");
       } catch (err) { 
           alert("生成請求失敗，請稍後再試"); 
           setPhotos(prev => prev.map(p => p.id === photo.id ? { ...p, videoStatus: null } : p)); 
@@ -139,33 +155,45 @@ export default function PhotographerPage() {
         
         {/* === Header 區域 === */}
         <header className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
-          <div className="flex w-full md:w-auto justify-between md:justify-start items-center gap-4">
-             <div className="flex items-center gap-2">
+          <div className="flex w-full md:w-auto flex-wrap items-center gap-4">
+             {/* 標題與開關 */}
+             <div className="flex items-center gap-4 mr-4">
                 <h1 className="text-2xl font-bold text-white shrink-0">工作台</h1>
                 
                 {/* [SaaS 控制器] 模擬 Super Admin 開關 */}
-                <label className="flex items-center gap-2 px-2 py-1 bg-yellow-900/30 border border-yellow-700/50 rounded cursor-pointer group">
+                <label className="flex items-center gap-2 px-3 py-1 bg-yellow-900/30 border border-yellow-700/50 rounded cursor-pointer group hover:bg-yellow-900/50 transition">
                     <div className="relative inline-flex items-center cursor-pointer">
                         <input type="checkbox" className="sr-only peer" checked={isAiFeatureEnabled} onChange={e => setIsAiFeatureEnabled(e.target.checked)} />
-                        <div className="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-yellow-600"></div>
+                        <div className="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-yellow-500"></div>
                     </div>
-                    <span className="text-[10px] text-yellow-500 font-mono group-hover:text-yellow-400">AI Module</span>
+                    <span className="text-[10px] text-yellow-500 font-mono font-bold group-hover:text-yellow-400">
+                        AI MODE {isAiFeatureEnabled ? 'ON' : 'OFF'}
+                    </span>
                 </label>
              </div>
 
-             <div className="flex bg-slate-900 rounded p-1 shrink-0">
-                <button onClick={() => setActiveTab('photos')} className={`px-3 py-1 text-sm rounded transition ${activeTab==='photos'?'bg-blue-600 text-white':'text-slate-400'}`}>照片</button>
-                <button onClick={() => setActiveTab('guests')} className={`px-3 py-1 text-sm rounded transition ${activeTab==='guests'?'bg-blue-600 text-white':'text-slate-400'}`}>名單</button>
-                <button onClick={() => { setActiveTab('stats'); loadStats(); }} className={`px-3 py-1 text-sm rounded transition ${activeTab==='stats'?'bg-blue-600 text-white':'text-slate-400'}`}>數據</button>
+             {/* 分頁按鈕群組 */}
+             <div className="flex bg-slate-900 rounded p-1 shrink-0 overflow-x-auto max-w-full">
+                <button onClick={() => setActiveTab('photos')} className={`px-3 py-1 text-sm rounded transition whitespace-nowrap ${activeTab==='photos'?'bg-blue-600 text-white':'text-slate-400 hover:text-white'}`}>照片</button>
+                <button onClick={() => setActiveTab('guests')} className={`px-3 py-1 text-sm rounded transition whitespace-nowrap ${activeTab==='guests'?'bg-blue-600 text-white':'text-slate-400 hover:text-white'}`}>名單</button>
+                <button onClick={() => { setActiveTab('stats'); loadStats(); }} className={`px-3 py-1 text-sm rounded transition whitespace-nowrap ${activeTab==='stats'?'bg-blue-600 text-white':'text-slate-400 hover:text-white'}`}>數據</button>
                 
-                {/* [SaaS 分頁] 只有開啟時才顯示 */}
+                {/* [重要] 這裡就是 AI 影片分頁按鈕，確認 isAiFeatureEnabled 為 true 時會顯示 */}
                 {isAiFeatureEnabled && (
                     <button 
                         onClick={() => setActiveTab('ai_video')} 
-                        className={`px-3 py-1 text-sm rounded transition flex items-center gap-1 ${activeTab==='ai_video'?'bg-purple-600 text-white':'text-purple-400'}`}
+                        className={`ml-2 px-3 py-1 text-sm rounded transition flex items-center gap-2 whitespace-nowrap font-bold
+                            ${activeTab==='ai_video' ? 'bg-purple-600 text-white shadow-lg shadow-purple-900/50' : 'bg-slate-800 text-purple-400 hover:bg-slate-700 hover:text-purple-300 border border-purple-500/30'}
+                        `}
                     >
-                        <span>🎬 AI 影片</span>
-                        {videoPhotos.some(v => v.videoStatus === 'PROCESSING') && <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>}
+                        <span>🎬 AI 影片庫</span>
+                        {/* 如果有影片正在製作，顯示一個紅色小圓點 */}
+                        {videoPhotos.some(v => v.videoStatus === 'PROCESSING') && (
+                            <span className="relative flex h-2 w-2">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                              <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                            </span>
+                        )}
                     </button>
                 )}
              </div>
@@ -200,24 +228,19 @@ export default function PhotographerPage() {
                             alt={`Photo ${photo.id}`} 
                         />
                         
-                        {photo.faces?.map((face, i) => (
-                            <div key={i} style={{ position: 'absolute', left: `${face.boundingBox.x * 100}%`, top: `${face.boundingBox.y * 100}%`, width: `${face.boundingBox.width * 100}%`, height: `${face.boundingBox.height * 100}%`, border: '2px solid #00ff00', boxShadow: '0 0 5px #00ff00', pointerEvents: 'none' }}>
-                                {face.person && <div className="absolute -top-6 left-0 bg-green-600 text-white text-[10px] px-1 rounded whitespace-nowrap z-10">{face.person.name}</div>}
-                            </div>
-                        ))}
-                        
+                        {/* 刪除按鈕 */}
                         <button onClick={() => setDeleteTargetId(photo.id)} className="absolute top-2 right-2 p-2 bg-red-600 text-white rounded-full opacity-0 group-hover:opacity-100 transition z-20 shadow-lg">🗑️</button>
                         
                         {/* 狀態標籤：如果正在製作或已完成，在圖上顯示小標記 */}
                         {isAiFeatureEnabled && photo.videoStatus && (
-                            <div className="absolute top-2 left-2 px-2 py-1 bg-black/50 backdrop-blur rounded text-[10px] text-white flex items-center gap-1">
-                                {photo.videoStatus === 'PROCESSING' && '⏳ 影片製作中'}
-                                {photo.videoStatus === 'COMPLETED' && '✅ 影片已完成'}
+                            <div className="absolute top-2 left-2 px-2 py-1 bg-black/60 backdrop-blur rounded border border-white/10 text-[10px] text-white flex items-center gap-1 z-10">
+                                {photo.videoStatus === 'PROCESSING' && <><span className="animate-spin">⏳</span> 製作中</>}
+                                {photo.videoStatus === 'COMPLETED' && '✅ 已生成'}
                             </div>
                         )}
                     </div>
 
-                    {/* [SaaS 控制] 按鈕區：做影片按鈕只有在開關 ON 時顯示 */}
+                    {/* [SaaS 控制] 按鈕區 */}
                     <div className="flex items-center justify-between bg-slate-800 border-t border-slate-700 divide-x divide-slate-700">
                         <button 
                             onClick={(e) => handleDirectDownload(e, photo)} 
@@ -226,27 +249,20 @@ export default function PhotographerPage() {
                             ⬇️ 下載
                         </button>
                         
-                        <button 
-                            onClick={(e) => handleShare(e, photo)} 
-                            className="flex-1 py-3 text-slate-300 hover:text-white hover:bg-slate-700 transition flex items-center justify-center gap-1 text-xs font-bold"
-                        >
-                            🔗 分享
-                        </button>
-
                         {/* 只有在 AI 功能開啟時才顯示這個按鈕 */}
                         {isAiFeatureEnabled && (
                             <button 
                                 onClick={(e) => handleGenerateVideo(e, photo)} 
-                                disabled={photo.videoStatus === 'PROCESSING' || photo.videoStatus === 'COMPLETED'}
+                                disabled={photo.videoStatus === 'PROCESSING'}
                                 className={`flex-1 py-3 transition flex items-center justify-center gap-1 text-xs font-bold
-                                    ${photo.videoStatus === 'COMPLETED' ? 'bg-slate-800 text-purple-400 cursor-default' : 
+                                    ${photo.videoStatus === 'COMPLETED' ? 'bg-slate-800 text-purple-300 hover:bg-purple-900/20' : 
                                     photo.videoStatus === 'PROCESSING' ? 'bg-slate-800 text-yellow-400 cursor-wait' : 
-                                    'bg-slate-800 hover:bg-purple-900/50 text-purple-300'}
+                                    'bg-purple-900/30 text-purple-300 hover:bg-purple-600 hover:text-white'}
                                 `}
                             >
-                                {photo.videoStatus === 'COMPLETED' ? '✅ 完成' : 
-                                photo.videoStatus === 'PROCESSING' ? '⏳ 製作' : 
-                                '✨ 影片'}
+                                {photo.videoStatus === 'COMPLETED' ? '▶️ 看影片' : 
+                                photo.videoStatus === 'PROCESSING' ? '⏳ 製作中' : 
+                                '✨ 做影片'}
                             </button>
                         )}
                     </div>
@@ -255,78 +271,100 @@ export default function PhotographerPage() {
             </div>
         )}
 
-        {/* === 2. [新功能] AI 影片分頁 === */}
+        {/* === 2. [新功能] AI 影片分頁 (這裡就是您要的影片存檔頁面) === */}
         {activeTab === 'ai_video' && isAiFeatureEnabled && (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-140px)]">
+                
                 {/* 左側：主播放器 */}
-                <div className="lg:col-span-2 bg-slate-900 rounded-2xl overflow-hidden border border-slate-800 flex flex-col justify-center items-center relative">
+                <div className="lg:col-span-2 bg-black rounded-2xl overflow-hidden border border-slate-800 flex flex-col relative shadow-2xl">
                     {currentVideoPhoto ? (
                         <>
-                           {currentVideoPhoto.videoStatus === 'COMPLETED' && currentVideoPhoto.videoUrl ? (
-                               <video 
-                                   key={currentVideoPhoto.id}
-                                   src={currentVideoPhoto.videoUrl} 
-                                   controls 
-                                   autoPlay
-                                   className="w-full h-full object-contain max-h-[80vh]" 
-                                   poster={currentVideoPhoto.url} 
-                               />
-                           ) : (
-                               <div className="text-center p-8">
-                                   <div className="text-4xl mb-4">⏳</div>
-                                   <h3 className="text-xl font-bold text-white">AI 正在努力運算中...</h3>
-                                   <p className="text-slate-400 mt-2">請稍候，影片完成後將自動播放。</p>
-                               </div>
-                           )}
+                           <div className="flex-1 flex items-center justify-center bg-zinc-900 relative">
+                               {currentVideoPhoto.videoStatus === 'COMPLETED' && currentVideoPhoto.videoUrl ? (
+                                   <video 
+                                       key={currentVideoPhoto.videoUrl} // Key 改變會強制重新載入影片
+                                       src={currentVideoPhoto.videoUrl} 
+                                       controls 
+                                       autoPlay
+                                       className="w-full h-full max-h-[75vh] object-contain" 
+                                       poster={currentVideoPhoto.url} 
+                                   />
+                               ) : currentVideoPhoto.videoStatus === 'FAILED' ? (
+                                   <div className="text-center text-red-400">
+                                       <p className="text-4xl mb-4">❌</p>
+                                       <p>影片生成失敗</p>
+                                   </div>
+                               ) : (
+                                   <div className="text-center p-8">
+                                       <div className="text-5xl mb-6 animate-bounce">⏳</div>
+                                       <h3 className="text-2xl font-bold text-white">AI 正在努力運算中...</h3>
+                                       <p className="text-slate-400 mt-2">約需 30-60 秒，完成後會自動播放。</p>
+                                   </div>
+                               )}
+                           </div>
                            
                            {/* 播放器下方的資訊條 */}
-                           <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent p-6 text-white">
-                               <h3 className="text-lg font-bold">照片 ID: {currentVideoPhoto.id}</h3>
-                               <div className="flex gap-4 mt-2">
-                                   <button onClick={(e) => handleDirectDownload(e, currentVideoPhoto)} className="text-sm hover:text-blue-400">⬇️ 下載影片</button>
-                                   <button onClick={(e) => handleShare(e, currentVideoPhoto)} className="text-sm hover:text-blue-400">🔗 分享連結</button>
+                           <div className="bg-slate-900 p-4 border-t border-slate-800 flex justify-between items-center">
+                               <div>
+                                   <h3 className="text-white font-bold text-sm">Photo ID: {currentVideoPhoto.id}</h3>
+                                   <p className="text-xs text-slate-500">狀態: {currentVideoPhoto.videoStatus}</p>
                                </div>
+                               {currentVideoPhoto.videoStatus === 'COMPLETED' && (
+                                   <div className="flex gap-3">
+                                       <button onClick={(e) => handleDirectDownload(e, currentVideoPhoto)} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded text-xs text-white transition">⬇️ 下載影片</button>
+                                       <button onClick={(e) => handleShare(e, currentVideoPhoto)} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-xs text-white transition">🔗 分享連結</button>
+                                   </div>
+                               )}
                            </div>
                         </>
                     ) : (
-                        <div className="text-center text-slate-500">
-                            <p className="text-2xl mb-2">🎬</p>
-                            <p>尚無影片產生</p>
-                            <p className="text-sm mt-2">請到「照片」分頁點擊「做影片」</p>
+                        <div className="flex-1 flex flex-col items-center justify-center text-slate-500">
+                            <p className="text-6xl mb-4">🎬</p>
+                            <h3 className="text-xl text-slate-300 font-bold">尚無影片</h3>
+                            <p className="text-sm mt-2">請回到「照片」頁面，點擊「做影片」按鈕。</p>
                         </div>
                     )}
                 </div>
 
-                {/* 右側：生成歷史列表 */}
-                <div className="lg:col-span-1 bg-slate-900 rounded-2xl border border-slate-800 flex flex-col overflow-hidden">
-                    <div className="p-4 border-b border-slate-800 bg-slate-800/50">
-                        <h3 className="font-bold text-white">影片庫 ({videoPhotos.length})</h3>
+                {/* 右側：生成歷史列表 (這裡會存所有做過的影片) */}
+                <div className="lg:col-span-1 bg-slate-900 rounded-2xl border border-slate-800 flex flex-col overflow-hidden shadow-xl">
+                    <div className="p-4 border-b border-slate-800 bg-slate-800/50 flex justify-between items-center">
+                        <h3 className="font-bold text-white">🎬 影片庫 ({videoPhotos.length})</h3>
+                        <span className="text-[10px] text-slate-500 bg-slate-950 px-2 py-1 rounded">History</span>
                     </div>
-                    <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                    
+                    <div className="flex-1 overflow-y-auto p-3 space-y-3">
+                        {videoPhotos.length === 0 && (
+                            <div className="text-center py-10 text-slate-600 text-sm">
+                                暫無紀錄
+                            </div>
+                        )}
                         {videoPhotos.map(p => (
                             <div 
                                 key={p.id} 
                                 onClick={() => setSelectedVideoId(p.id)}
-                                className={`flex gap-3 p-2 rounded-lg cursor-pointer transition border
+                                className={`flex gap-3 p-3 rounded-xl cursor-pointer transition border group
                                     ${selectedVideoId === p.id 
-                                        ? 'bg-purple-900/30 border-purple-500/50' 
-                                        : 'bg-slate-800/50 border-transparent hover:bg-slate-800 hover:border-slate-700'}
+                                        ? 'bg-purple-900/20 border-purple-500/50' 
+                                        : 'bg-slate-800/40 border-transparent hover:bg-slate-800 hover:border-slate-700'}
                                 `}
                             >
-                                <div className="w-20 h-14 bg-black rounded overflow-hidden flex-shrink-0 relative">
-                                    <img src={p.url} className="w-full h-full object-cover opacity-70" alt="" />
-                                    {/* 狀態圖示 */}
-                                    <div className="absolute inset-0 flex items-center justify-center">
+                                {/* 列表縮圖 */}
+                                <div className="w-24 h-16 bg-black rounded-lg overflow-hidden flex-shrink-0 relative border border-slate-700/50">
+                                    <img src={p.url} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition" alt="" />
+                                    <div className="absolute inset-0 flex items-center justify-center bg-black/20">
                                         {p.videoStatus === 'PROCESSING' && <span className="animate-spin text-xl">⏳</span>}
-                                        {p.videoStatus === 'COMPLETED' && <span className="text-white drop-shadow-md">▶️</span>}
+                                        {p.videoStatus === 'COMPLETED' && <span className="text-white drop-shadow-md text-xl">▶️</span>}
                                     </div>
                                 </div>
+                                
+                                {/* 列表文字資訊 */}
                                 <div className="flex-1 min-w-0 flex flex-col justify-center">
                                     <div className="text-sm font-bold text-slate-200 truncate">Photo #{p.id}</div>
                                     <div className="flex items-center gap-2 text-xs mt-1">
-                                        {p.videoStatus === 'PROCESSING' && <span className="text-yellow-400">運算中...</span>}
-                                        {p.videoStatus === 'COMPLETED' && <span className="text-green-400">已完成</span>}
-                                        {p.videoStatus === 'FAILED' && <span className="text-red-400">失敗</span>}
+                                        {p.videoStatus === 'PROCESSING' && <span className="text-yellow-400 font-mono flex items-center gap-1"><span className="w-1.5 h-1.5 bg-yellow-400 rounded-full animate-pulse"></span> 運算中...</span>}
+                                        {p.videoStatus === 'COMPLETED' && <span className="text-green-400 font-mono">Completed</span>}
+                                        {p.videoStatus === 'FAILED' && <span className="text-red-400 font-mono">Error</span>}
                                     </div>
                                 </div>
                             </div>
@@ -402,6 +440,7 @@ export default function PhotographerPage() {
         )}
       </div>
       
+      {/* 刪除確認 Modal */}
       {deleteTargetId && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
             <div className="bg-slate-800 p-6 rounded text-center border border-slate-700">
