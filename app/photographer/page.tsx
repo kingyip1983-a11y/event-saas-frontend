@@ -24,8 +24,8 @@ interface Photo {
     faces?: Face[];
     videoStatus?: 'PROCESSING' | 'COMPLETED' | 'FAILED' | null;
     videoUrl?: string;
-    downloads?: number; // 下載數
-    shares?: number;    // 分享數
+    downloads?: number; 
+    shares?: number;    
 }
 interface Person { id: number; name: string; phoneNumber: string; seatNumber?: string; }
 
@@ -64,13 +64,19 @@ export default function PhotographerPage() {
     );
   }, [photos]);
 
-  // 排行榜排序邏輯
+  // [修正] 排行榜排序邏輯：確保 undefined 被視為 0
   const rankedPhotos = useMemo(() => {
-      // 依照下載數 (downloads) 由高到低排序，若相同則比分享數
       return [...photos].sort((a, b) => {
-          const downloadsDiff = (b.downloads || 0) - (a.downloads || 0);
-          if (downloadsDiff !== 0) return downloadsDiff;
-          return (b.shares || 0) - (a.shares || 0);
+          const downloadsA = a.downloads || 0;
+          const downloadsB = b.downloads || 0;
+          const sharesA = a.shares || 0;
+          const sharesB = b.shares || 0;
+
+          // 先比下載量，再比分享量
+          if (downloadsB !== downloadsA) {
+              return downloadsB - downloadsA;
+          }
+          return sharesB - sharesA;
       });
   }, [photos]);
 
@@ -96,11 +102,12 @@ export default function PhotographerPage() {
   const loadAllGuests = () => { fetch(`${BACKEND_URL}/guests`).then(res => res.json()).then(data => { if (Array.isArray(data)) setGuests(data); }).catch(console.error); };
   const loadStats = () => { fetch(`${BACKEND_URL}/analytics/stats`).then(res => res.json()).then(data => setStats(data)).catch(console.error); };
 
-  // [新增] 當切換到數據頁 (stats) 時，強制重新抓取一次照片列表，確保後端數據同步
+  // [重點修正] 當切換分頁時，只更新「總體數據 (loadStats)」，**不要** 重新讀取照片列表 (loadAllPhotos)。
+  // 這樣可以避免後端尚未同步的空數據覆蓋掉前端剛點擊產生的計數。
   useEffect(() => {
       if (activeTab === 'stats' && isAuthenticated) {
-          loadAllPhotos();
-          loadStats();
+          // loadAllPhotos(); <--- 移除這行，防止覆蓋
+          loadStats(); // 只更新上方的總卡片
       }
   }, [activeTab, isAuthenticated]);
 
@@ -115,29 +122,34 @@ export default function PhotographerPage() {
     return () => { socket.off('new_photo_ready'); socket.off('photo_deleted'); socket.off('video_ready'); };
   }, [isAuthenticated, activeTab]);
 
-  // [修正] 下載處理：同時更新前端 State 與觸發後端下載
+  // [修正] 下載處理：使用 create element 避免頁面跳轉感，並確實更新前端 State
   const handleDirectDownload = (e: React.MouseEvent, photo: Photo) => { 
       e.stopPropagation(); 
       e.preventDefault(); 
       
-      // 1. 前端樂觀更新：直接將該照片下載數 +1
+      // 1. 前端樂觀更新：單張照片數據 +1
       setPhotos(prev => prev.map(p => 
           p.id === photo.id ? { ...p, downloads: (p.downloads || 0) + 1 } : p
       ));
       
-      // 2. 更新總數據 (可選，讓上方卡片也跳動)
+      // 2. 更新總數據 (讓上方卡片同步跳動)
       setStats(prev => ({ ...prev, totalDownloads: prev.totalDownloads + 1 }));
 
-      // 3. 執行實際下載
-      window.location.href = `${BACKEND_URL}/photos/${photo.id}/download-proxy`; 
+      // 3. 觸發下載 (使用較溫和的方式)
+      const link = document.createElement('a');
+      link.href = `${BACKEND_URL}/photos/${photo.id}/download-proxy`;
+      link.setAttribute('download', `photo-${photo.id}.jpg`); // 嘗試強制觸發下載行為
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
   };
   
-  // [修正] 分享處理：同時更新前端 State 與觸發後端追蹤
+  // [修正] 分享處理
   const handleShare = async (e: React.MouseEvent, photo: Photo) => { 
       e.stopPropagation(); 
       e.preventDefault(); 
       
-      // 1. 前端樂觀更新：直接將該照片分享數 +1
+      // 1. 前端樂觀更新
       setPhotos(prev => prev.map(p => 
           p.id === photo.id ? { ...p, shares: (p.shares || 0) + 1 } : p
       ));
@@ -154,7 +166,7 @@ export default function PhotographerPage() {
           }); 
       } catch (e) {} 
       
-      // 4. 執行原生分享
+      // 4. 原生分享
       const shareData = { title: '活動照片', url: photo.url };
       if (navigator.share && navigator.canShare && navigator.canShare(shareData)) { 
           navigator.share(shareData).catch(console.error); 
@@ -245,7 +257,6 @@ export default function PhotographerPage() {
                             loading="lazy" 
                             alt={`Photo ${photo.id}`} 
                         />
-                        {/* 綠色 AI 框框 */}
                         {photo.faces?.map((face, i) => (
                             <div key={i} style={{ position: 'absolute', left: `${face.boundingBox.x * 100}%`, top: `${face.boundingBox.y * 100}%`, width: `${face.boundingBox.width * 100}%`, height: `${face.boundingBox.height * 100}%`, border: '2px solid #00ff00', boxShadow: '0 0 5px #00ff00', pointerEvents: 'none' }}>
                                 {face.person && <div className="absolute -top-6 left-0 bg-green-600 text-white text-[10px] px-1 rounded whitespace-nowrap z-10">{face.person.name}</div>}
@@ -392,6 +403,7 @@ export default function PhotographerPage() {
                                         <td className="p-4 text-center font-bold text-lg">{index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : index + 1}</td>
                                         <td className="p-4"><div className="w-16 h-12 bg-black rounded overflow-hidden border border-slate-700"><img src={photo.url} className="w-full h-full object-cover" alt="" /></div></td>
                                         <td className="p-4 text-slate-400 font-mono">#{photo.id}</td>
+                                        {/* [修正] 使用 || 0 確保即使是 undefined 也能顯示 0 */}
                                         <td className="p-4 text-center text-green-400 font-bold">{photo.downloads || 0}</td>
                                         <td className="p-4 text-center text-blue-400 font-bold">{photo.shares || 0}</td>
                                     </tr>
