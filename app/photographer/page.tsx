@@ -5,21 +5,43 @@ import { io } from 'socket.io-client';
 import Papa from 'papaparse';
 import imageCompression from 'browser-image-compression';
 
+// 優先讀取環境變數
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "https://event-saas-backend-production.up.railway.app";
 const socket = io(BACKEND_URL);
 
 const ADMIN_PASSWORD = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || "admin"; 
 
-interface Face { id: number; boundingBox: { x: number; y: number; width: number; height: number }; person?: { name: string; } }
-interface Photo { id: number; url: string; originalUrl?: string; status: string; faces?: Face[]; }
-interface Person { id: number; name: string; phoneNumber: string; seatNumber?: string; }
+// --- 型別定義 ---
+interface Face { 
+    id: number; 
+    boundingBox: { x: number; y: number; width: number; height: number }; 
+    person?: { name: string; } 
+}
+
+interface Photo { 
+    id: number; 
+    url: string; 
+    originalUrl?: string; 
+    status: string; 
+    faces?: Face[];
+    // 👇 新增影片相關欄位
+    videoStatus?: 'PROCESSING' | 'COMPLETED' | 'FAILED' | null;
+    videoUrl?: string;
+}
+
+interface Person { 
+    id: number; 
+    name: string; 
+    phoneNumber: string; 
+    seatNumber?: string; 
+}
 
 export default function PhotographerPage() {
+  // 狀態管理
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
-  // 📝 增加 'stats' 分頁
   const [activeTab, setActiveTab] = useState<'photos' | 'guests' | 'stats'>('photos');
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [guests, setGuests] = useState<Person[]>([]);
@@ -28,22 +50,38 @@ export default function PhotographerPage() {
   const [uploading, setUploading] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<'framed' | 'original'>('framed');
+
   const [newGuest, setNewGuest] = useState({ name: '', phone: '', seat: '' });
 
+  // 🔐 登入處理
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     if (passwordInput === ADMIN_PASSWORD) {
       setIsAuthenticated(true);
       loadAllPhotos();
       loadAllGuests();
-      loadStats(); // 登入時載入數據
-    } else { setErrorMsg('密碼錯誤'); setPasswordInput(''); }
+      loadStats();
+    } else { 
+      setErrorMsg('密碼錯誤'); 
+      setPasswordInput(''); 
+    }
   };
 
-  const loadAllPhotos = () => { fetch(`${BACKEND_URL}/photos`).then(res => res.json()).then(data => { if (Array.isArray(data)) setPhotos(data); }); };
-  const loadAllGuests = () => { fetch(`${BACKEND_URL}/guests`).then(res => res.json()).then(data => { if (Array.isArray(data)) setGuests(data); }); };
-  
-  // 📊 載入數據函式
+  // 📡 載入資料
+  const loadAllPhotos = () => {
+    fetch(`${BACKEND_URL}/photos`)
+      .then(res => res.json())
+      .then(data => { if (Array.isArray(data)) setPhotos(data); })
+      .catch(console.error);
+  };
+
+  const loadAllGuests = () => {
+    fetch(`${BACKEND_URL}/guests`)
+      .then(res => res.json())
+      .then(data => { if (Array.isArray(data)) setGuests(data); })
+      .catch(console.error);
+  };
+
   const loadStats = () => { 
       fetch(`${BACKEND_URL}/analytics/stats`)
         .then(res => res.json())
@@ -51,13 +89,94 @@ export default function PhotographerPage() {
         .catch(console.error); 
   };
 
+  // 🔌 Socket 連線監聽
   useEffect(() => {
     if (!isAuthenticated) return;
-    socket.on('new_photo_ready', (newPhoto: Photo) => { setPhotos(prev => [newPhoto, ...prev.filter(p => p.id !== newPhoto.id)]); loadStats(); });
-    socket.on('photo_deleted', (id: number) => { setPhotos(prev => prev.filter(p => p.id !== id)); loadStats(); });
-    return () => { socket.off('new_photo_ready'); socket.off('photo_deleted'); };
+
+    // 1. 新照片上傳
+    socket.on('new_photo_ready', (newPhoto: Photo) => {
+        setPhotos(prev => [newPhoto, ...prev.filter(p => p.id !== newPhoto.id)]);
+        loadStats();
+    });
+
+    // 2. 照片刪除
+    socket.on('photo_deleted', (id: number) => {
+        setPhotos(prev => prev.filter(p => p.id !== id));
+        loadStats();
+    });
+
+    // 3. 影片生成完成 (Luma)
+    socket.on('video_ready', ({ photoId, videoUrl }: { photoId: number, videoUrl: string }) => {
+        setPhotos(prev => prev.map(p => 
+            p.id === photoId ? { ...p, videoStatus: 'COMPLETED', videoUrl } : p
+        ));
+    });
+
+    return () => { 
+        socket.off('new_photo_ready'); 
+        socket.off('photo_deleted'); 
+        socket.off('video_ready');
+    };
   }, [isAuthenticated]);
 
+  // --- 功能函式區 ---
+
+  // ⬇️ 1. 強制下載 (呼叫後端代理，解決彈窗問題)
+  const handleDirectDownload = (e: React.MouseEvent, photo: Photo) => {
+    e.stopPropagation();
+    e.preventDefault();
+    // 直接導向後端代理網址
+    window.location.href = `${BACKEND_URL}/photos/${photo.id}/download-proxy`;
+  };
+
+  // 🔗 2. 分享功能
+  const handleShare = async (e: React.MouseEvent, photo: Photo) => {
+    e.stopPropagation();
+    e.preventDefault();
+    
+    // 統計
+    try {
+        fetch(`${BACKEND_URL}/analytics/track`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ photoId: photo.id, type: 'SHARE' })
+        });
+    } catch (e) {}
+
+    // 呼叫原生分享
+    if (navigator.share) {
+        navigator.share({ title: '活動照片', url: photo.url }).catch(console.error);
+    } else {
+        navigator.clipboard.writeText(photo.url);
+        alert("連結已複製！");
+    }
+  };
+
+  // 🎬 3. 生成 AI 擁抱影片 (Luma)
+  const handleGenerateVideo = async (e: React.MouseEvent, photo: Photo) => {
+    e.stopPropagation();
+    e.preventDefault();
+
+    if (photo.videoStatus === 'PROCESSING') return;
+
+    // 樂觀更新 (UI 先轉圈圈)
+    setPhotos(prev => prev.map(p => p.id === photo.id ? { ...p, videoStatus: 'PROCESSING' } : p));
+
+    try {
+        const res = await fetch(`${BACKEND_URL}/photos/generate-video`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ photoId: photo.id })
+        });
+        if (!res.ok) throw new Error("API Error");
+    } catch (err) {
+        alert("生成請求失敗，請稍後再試");
+        // 失敗則還原狀態
+        setPhotos(prev => prev.map(p => p.id === photo.id ? { ...p, videoStatus: null } : p));
+    }
+  };
+
+  // 🗑️ 刪除照片
   const executeDeletePhoto = async () => {
     if (!deleteTargetId) return;
     try {
@@ -66,9 +185,13 @@ export default function PhotographerPage() {
     } catch (err) { alert('連線錯誤'); }
   };
 
+  // 🗑️ 刪除賓客
   const handleDeleteGuest = async (id: number, name: string) => {
     if (!confirm(`確定要刪除賓客「${name}」嗎？`)) return;
-    try { const res = await fetch(`${BACKEND_URL}/guest/${id}`, { method: 'DELETE' }); if (res.ok) setGuests(prev => prev.filter(g => g.id !== id)); } catch (err) { alert('連線錯誤'); }
+    try {
+        const res = await fetch(`${BACKEND_URL}/guest/${id}`, { method: 'DELETE' });
+        if (res.ok) setGuests(prev => prev.filter(g => g.id !== id));
+    } catch (err) { alert('連線錯誤'); }
   };
 
   const downloadTemplate = () => {
@@ -100,7 +223,7 @@ export default function PhotographerPage() {
     }
     setUploading(false);
     loadAllPhotos();
-    loadStats(); // 上傳後更新數據
+    loadStats();
     e.target.value = ''; 
   };
 
@@ -133,6 +256,8 @@ export default function PhotographerPage() {
     });
   };
 
+  // --- 渲染畫面 ---
+
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
@@ -155,7 +280,6 @@ export default function PhotographerPage() {
              <div className="flex bg-slate-900 rounded p-1 shrink-0">
                 <button onClick={() => setActiveTab('photos')} className={`px-3 py-1 text-sm rounded transition ${activeTab==='photos'?'bg-blue-600 text-white':'text-slate-400'}`}>照片</button>
                 <button onClick={() => setActiveTab('guests')} className={`px-3 py-1 text-sm rounded transition ${activeTab==='guests'?'bg-blue-600 text-white':'text-slate-400'}`}>名單</button>
-                {/* 🌟 新增數據 Tab */}
                 <button onClick={() => { setActiveTab('stats'); loadStats(); }} className={`px-3 py-1 text-sm rounded transition ${activeTab==='stats'?'bg-blue-600 text-white':'text-slate-400'}`}>數據</button>
              </div>
           </div>
@@ -177,22 +301,63 @@ export default function PhotographerPage() {
         {activeTab === 'photos' && (
             <div className="columns-2 md:columns-4 lg:columns-5 gap-4 space-y-4 mx-auto">
             {photos.map(photo => (
-                <div key={photo.id} className="break-inside-avoid group bg-slate-900 rounded-lg overflow-hidden border border-slate-800 mb-4">
+                <div key={photo.id} className="break-inside-avoid group bg-slate-900 rounded-lg overflow-hidden border border-slate-800 mb-4 shadow-lg">
+                    
                     <div className="relative w-full"> 
-                        <img src={viewMode === 'original' && photo.originalUrl ? photo.originalUrl : photo.url} className="w-full h-auto block" loading="lazy" alt={`Photo ${photo.id}`} />
-                        {/* 🟩 綠色 AI 框框 (現在後端有修復了，這裡應該會顯示) */}
+                        {/* 🎬 如果影片完成了，點擊圖片就播放影片，否則顯示圖片 */}
+                        {photo.videoStatus === 'COMPLETED' && photo.videoUrl ? (
+                            <div className="relative">
+                                <video src={photo.videoUrl} controls className="w-full h-auto" poster={photo.url} />
+                                <div className="absolute top-2 left-2 bg-purple-600 text-white text-[10px] font-bold px-2 py-1 rounded-full shadow z-10">AI 影片</div>
+                            </div>
+                        ) : (
+                            <img src={viewMode === 'original' && photo.originalUrl ? photo.originalUrl : photo.url} className="w-full h-auto block" loading="lazy" alt={`Photo ${photo.id}`} />
+                        )}
+                        
+                        {/* 🟩 綠色 AI 框框 */}
                         {photo.faces?.map((face, i) => (
-                            <div key={i} style={{ position: 'absolute', left: `${face.boundingBox.x * 100}%`, top: `${face.boundingBox.y * 100}%`, width: `${face.boundingBox.width * 100}%`, height: `${face.boundingBox.height * 100}%`, border: '2px solid #00ff00', boxShadow: '0 0 5px #00ff00' }}>
+                            <div key={i} style={{ position: 'absolute', left: `${face.boundingBox.x * 100}%`, top: `${face.boundingBox.y * 100}%`, width: `${face.boundingBox.width * 100}%`, height: `${face.boundingBox.height * 100}%`, border: '2px solid #00ff00', boxShadow: '0 0 5px #00ff00', pointerEvents: 'none' }}>
                                 {face.person && <div className="absolute -top-6 left-0 bg-green-600 text-white text-[10px] px-1 rounded whitespace-nowrap z-10">{face.person.name}</div>}
                             </div>
                         ))}
-                        <button onClick={() => setDeleteTargetId(photo.id)} className="absolute top-2 right-2 p-2 bg-red-600 text-white rounded-full opacity-0 group-hover:opacity-100 transition z-20">🗑️</button>
-                    </div> 
+
+                        {/* 🗑️ 刪除按鈕 */}
+                        <button onClick={() => setDeleteTargetId(photo.id)} className="absolute top-2 right-2 p-2 bg-red-600 text-white rounded-full opacity-0 group-hover:opacity-100 transition z-20 shadow-lg">🗑️</button>
+                    </div>
+
+                    {/* 👇 [新增] 底部操作按鈕列 (下載 / 分享 / 影片) */}
+                    <div className="flex items-center justify-between bg-slate-800 p-2 border-t border-slate-700">
+                        
+                        <button onClick={(e) => handleDirectDownload(e, photo)} className="p-2 text-slate-300 hover:text-white hover:bg-slate-700 rounded transition" title="下載">
+                            ⬇️
+                        </button>
+                        
+                        <button onClick={(e) => handleShare(e, photo)} className="p-2 text-slate-300 hover:text-white hover:bg-slate-700 rounded transition" title="分享">
+                            🔗
+                        </button>
+
+                        {/* 🎬 生成影片按鈕 (狀態控制) */}
+                        <button 
+                            onClick={(e) => handleGenerateVideo(e, photo)} 
+                            disabled={photo.videoStatus === 'PROCESSING' || photo.videoStatus === 'COMPLETED'}
+                            className={`px-3 py-1 rounded text-xs font-bold transition flex items-center gap-1
+                                ${photo.videoStatus === 'COMPLETED' ? 'bg-purple-900/50 text-purple-300 cursor-default' : 
+                                  photo.videoStatus === 'PROCESSING' ? 'bg-yellow-900/50 text-yellow-300 cursor-wait' : 
+                                  'bg-purple-600 hover:bg-purple-500 text-white'}
+                            `}
+                        >
+                            {photo.videoStatus === 'COMPLETED' ? '✅ 已生成' : 
+                             photo.videoStatus === 'PROCESSING' ? '⏳ 製作中' : 
+                             '✨ 做影片'}
+                        </button>
+
+                    </div>
                 </div>
             ))}
             </div>
         )}
 
+        {/* Guest Tab & Stats Tab (保持不變) */}
         {activeTab === 'guests' && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                 <div className="md:col-span-1 space-y-6">
@@ -239,7 +404,6 @@ export default function PhotographerPage() {
             </div>
         )}
 
-        {/* 📊 新增的數據顯示區塊 */}
         {activeTab === 'stats' && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="bg-slate-900 p-8 rounded-2xl border border-slate-800 text-center">
