@@ -24,8 +24,8 @@ interface Photo {
     faces?: Face[];
     videoStatus?: 'PROCESSING' | 'COMPLETED' | 'FAILED' | null;
     videoUrl?: string;
-    downloads?: number;
-    shares?: number;
+    downloads?: number; // 下載數
+    shares?: number;    // 分享數
 }
 interface Person { id: number; name: string; phoneNumber: string; seatNumber?: string; }
 
@@ -35,7 +35,7 @@ export default function PhotographerPage() {
   const [passwordInput, setPasswordInput] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
-  // 2. SaaS 功能開關 (Super Admin Control) - 預設開啟
+  // 2. SaaS 功能開關
   const [isAiFeatureEnabled, setIsAiFeatureEnabled] = useState(true);
 
   // 3. 頁面導覽狀態
@@ -64,8 +64,14 @@ export default function PhotographerPage() {
     );
   }, [photos]);
 
+  // 排行榜排序邏輯
   const rankedPhotos = useMemo(() => {
-      return [...photos].sort((a, b) => (b.downloads || 0) - (a.downloads || 0));
+      // 依照下載數 (downloads) 由高到低排序，若相同則比分享數
+      return [...photos].sort((a, b) => {
+          const downloadsDiff = (b.downloads || 0) - (a.downloads || 0);
+          if (downloadsDiff !== 0) return downloadsDiff;
+          return (b.shares || 0) - (a.shares || 0);
+      });
   }, [photos]);
 
   const currentVideoPhoto = useMemo(() => {
@@ -90,6 +96,14 @@ export default function PhotographerPage() {
   const loadAllGuests = () => { fetch(`${BACKEND_URL}/guests`).then(res => res.json()).then(data => { if (Array.isArray(data)) setGuests(data); }).catch(console.error); };
   const loadStats = () => { fetch(`${BACKEND_URL}/analytics/stats`).then(res => res.json()).then(data => setStats(data)).catch(console.error); };
 
+  // [新增] 當切換到數據頁 (stats) 時，強制重新抓取一次照片列表，確保後端數據同步
+  useEffect(() => {
+      if (activeTab === 'stats' && isAuthenticated) {
+          loadAllPhotos();
+          loadStats();
+      }
+  }, [activeTab, isAuthenticated]);
+
   useEffect(() => {
     if (!isAuthenticated) return;
     socket.on('new_photo_ready', (newPhoto: Photo) => { setPhotos(prev => [newPhoto, ...prev.filter(p => p.id !== newPhoto.id)]); loadStats(); });
@@ -101,13 +115,53 @@ export default function PhotographerPage() {
     return () => { socket.off('new_photo_ready'); socket.off('photo_deleted'); socket.off('video_ready'); };
   }, [isAuthenticated, activeTab]);
 
-  const handleDirectDownload = (e: React.MouseEvent, photo: Photo) => { e.stopPropagation(); e.preventDefault(); window.location.href = `${BACKEND_URL}/photos/${photo.id}/download-proxy`; };
+  // [修正] 下載處理：同時更新前端 State 與觸發後端下載
+  const handleDirectDownload = (e: React.MouseEvent, photo: Photo) => { 
+      e.stopPropagation(); 
+      e.preventDefault(); 
+      
+      // 1. 前端樂觀更新：直接將該照片下載數 +1
+      setPhotos(prev => prev.map(p => 
+          p.id === photo.id ? { ...p, downloads: (p.downloads || 0) + 1 } : p
+      ));
+      
+      // 2. 更新總數據 (可選，讓上方卡片也跳動)
+      setStats(prev => ({ ...prev, totalDownloads: prev.totalDownloads + 1 }));
+
+      // 3. 執行實際下載
+      window.location.href = `${BACKEND_URL}/photos/${photo.id}/download-proxy`; 
+  };
   
+  // [修正] 分享處理：同時更新前端 State 與觸發後端追蹤
   const handleShare = async (e: React.MouseEvent, photo: Photo) => { 
-      e.stopPropagation(); e.preventDefault(); 
-      try { fetch(`${BACKEND_URL}/analytics/track`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ photoId: photo.id, type: 'SHARE' }) }); } catch (e) {} 
+      e.stopPropagation(); 
+      e.preventDefault(); 
+      
+      // 1. 前端樂觀更新：直接將該照片分享數 +1
+      setPhotos(prev => prev.map(p => 
+          p.id === photo.id ? { ...p, shares: (p.shares || 0) + 1 } : p
+      ));
+      
+      // 2. 更新總數據
+      setStats(prev => ({ ...prev, totalShares: prev.totalShares + 1 }));
+
+      // 3. 後端 API 追蹤
+      try { 
+          fetch(`${BACKEND_URL}/analytics/track`, { 
+              method: 'POST', 
+              headers: { 'Content-Type': 'application/json' }, 
+              body: JSON.stringify({ photoId: photo.id, type: 'SHARE' }) 
+          }); 
+      } catch (e) {} 
+      
+      // 4. 執行原生分享
       const shareData = { title: '活動照片', url: photo.url };
-      if (navigator.share && navigator.canShare && navigator.canShare(shareData)) { navigator.share(shareData).catch(console.error); } else { navigator.clipboard.writeText(photo.url); alert("連結已複製到剪貼簿！"); } 
+      if (navigator.share && navigator.canShare && navigator.canShare(shareData)) { 
+          navigator.share(shareData).catch(console.error); 
+      } else { 
+          navigator.clipboard.writeText(photo.url); 
+          alert("連結已複製到剪貼簿！"); 
+      } 
   };
   
   const handleGenerateVideo = async (e: React.MouseEvent, photo: Photo) => { 
@@ -191,7 +245,7 @@ export default function PhotographerPage() {
                             loading="lazy" 
                             alt={`Photo ${photo.id}`} 
                         />
-                        {/* [修正] 加回 綠色 AI 框框 (Face Bounding Box) */}
+                        {/* 綠色 AI 框框 */}
                         {photo.faces?.map((face, i) => (
                             <div key={i} style={{ position: 'absolute', left: `${face.boundingBox.x * 100}%`, top: `${face.boundingBox.y * 100}%`, width: `${face.boundingBox.width * 100}%`, height: `${face.boundingBox.height * 100}%`, border: '2px solid #00ff00', boxShadow: '0 0 5px #00ff00', pointerEvents: 'none' }}>
                                 {face.person && <div className="absolute -top-6 left-0 bg-green-600 text-white text-[10px] px-1 rounded whitespace-nowrap z-10">{face.person.name}</div>}
@@ -338,8 +392,8 @@ export default function PhotographerPage() {
                                         <td className="p-4 text-center font-bold text-lg">{index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : index + 1}</td>
                                         <td className="p-4"><div className="w-16 h-12 bg-black rounded overflow-hidden border border-slate-700"><img src={photo.url} className="w-full h-full object-cover" alt="" /></div></td>
                                         <td className="p-4 text-slate-400 font-mono">#{photo.id}</td>
-                                        <td className="p-4 text-center text-green-400 font-bold">{photo.downloads || '-'}</td>
-                                        <td className="p-4 text-center text-blue-400 font-bold">{photo.shares || '-'}</td>
+                                        <td className="p-4 text-center text-green-400 font-bold">{photo.downloads || 0}</td>
+                                        <td className="p-4 text-center text-blue-400 font-bold">{photo.shares || 0}</td>
                                     </tr>
                                 ))}
                                 {rankedPhotos.length === 0 && (<tr><td colSpan={5} className="p-8 text-center text-slate-500">尚無資料</td></tr>)}
