@@ -67,50 +67,19 @@ export default function Home() {
       setPhotos([]);
   };
 
-  // ⬇️ [新功能] 強制下載並統計次數
-  const handleDirectDownload = async (e: React.MouseEvent, photo: any) => {
-    // 🛑 1. 阻止事件冒泡 (防止觸發原本的點擊看大圖)
+  // ⬇️ [新功能] 強制下載 (改用後端代理模式)
+  const handleDirectDownload = (e: React.MouseEvent, photo: any) => {
+    // 🛑 1. 阻止事件冒泡
     e.stopPropagation(); 
     e.preventDefault();
 
-    try {
-        // 📊 2. 通知後端更新下載次數 (使用最上方定義的 BACKEND_URL)
-        fetch(`${BACKEND_URL}/photos/${photo.id}/download`, { method: 'POST' })
-            .catch(err => console.error("統計更新失敗", err));
-
-        // 📥 3. 開始下載流程
-        console.log("正在準備下載...", photo.url);
-        
-        // 使用 fetch 抓取圖片資料 (避開瀏覽器直接打開圖片的行為)
-        const response = await fetch(photo.url);
-        if (!response.ok) throw new Error('Network response was not ok');
-        
-        const blob = await response.blob(); // 轉成二進制物件
-        const blobUrl = window.URL.createObjectURL(blob);
-        
-        // 建立一個隱藏的下載連結並自動點擊
-        const link = document.createElement('a');
-        link.href = blobUrl;
-        
-        // 🧹 清理檔名 (移除 Luma 可能留下的 ID 標記，只留原始檔名)
-        const cleanName = photo.fileName && photo.fileName.includes('|') 
-            ? photo.fileName.split('|').pop() 
-            : (photo.fileName || `photo-${photo.id}.jpg`);
-            
-        link.download = cleanName; 
-        
-        document.body.appendChild(link);
-        link.click(); // 模擬點擊
-        document.body.removeChild(link);
-        
-        // 清除記憶體
-        window.URL.revokeObjectURL(blobUrl);
-
-    } catch (error) {
-        console.error("下載失敗:", error);
-        // 備案：如果 fetch 失敗 (例如 CORS 問題)，則退回「開新視窗」的方式
-        window.open(photo.url, '_blank');
-    }
+    // 🔗 2. 組合後端代理網址
+    // 這會直接觸發瀏覽器的原生下載行為，而且 100% 保證會計算次數
+    const downloadUrl = `${BACKEND_URL}/photos/${photo.id}/download-proxy`;
+    
+    // 📥 3. 觸發下載
+    // 使用 location.href 會讓瀏覽器直接下載檔案，且不會跳轉頁面 (因為後端回傳的是 attachment)
+    window.location.href = downloadUrl;
   };
 
   return (
