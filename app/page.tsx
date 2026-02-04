@@ -67,18 +67,21 @@ export default function Home() {
       setPhotos([]);
   };
 
-  // ⬇️ [新功能] 強制下載 (改用後端代理模式)
+  // ⬇️ [核心功能] 強制下載 (後端代理模式)
+  // 這段代碼本身是完美的，前提是後端必須有對應的接口
   const handleDirectDownload = (e: React.MouseEvent, photo: any) => {
-    // 🛑 1. 阻止事件冒泡
+    // 🛑 1. 阻止事件冒泡 (防止觸發圖片預覽)
     e.stopPropagation(); 
     e.preventDefault();
 
     // 🔗 2. 組合後端代理網址
-    // 這會直接觸發瀏覽器的原生下載行為，而且 100% 保證會計算次數
+    // 原理：直接讓瀏覽器訪問這個網址，後端會回傳 "Attachment" 標頭，
+    // 瀏覽器收到後會自動開始下載，而不會跳轉頁面。
     const downloadUrl = `${BACKEND_URL}/photos/${photo.id}/download-proxy`;
     
-    // 📥 3. 觸發下載
-    // 使用 location.href 會讓瀏覽器直接下載檔案，且不會跳轉頁面 (因為後端回傳的是 attachment)
+    console.log(`📥 啟動下載: ${downloadUrl}`);
+
+    // 📥 3. 觸發原生下載
     window.location.href = downloadUrl;
   };
 
@@ -169,10 +172,10 @@ export default function Home() {
                                     alt="Event Photo"
                                 />
 
-                                {/* 🛠️ 絕對定位按鈕列 (永遠顯示) */}
+                                {/* 🛠️ 絕對定位按鈕列 */}
                                 <div className="absolute bottom-0 left-0 right-0 z-20 flex bg-slate-900/90 backdrop-blur-md border-t border-slate-700">
                                     <button 
-                                        // 👇 [修正] 改用 handleDirectDownload，並傳入事件 e
+                                        // 👇 使用優化後的下載函式
                                         onClick={(e) => handleDirectDownload(e, photo)}
                                         className="flex-1 py-4 text-white text-sm font-bold hover:bg-slate-800 transition flex items-center justify-center gap-2"
                                     >
