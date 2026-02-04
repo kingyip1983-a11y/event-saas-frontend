@@ -18,7 +18,7 @@ interface Face {
 interface Photo { 
     id: number; 
     url: string; 
-    originalUrl?: string; // ⚠️ 關鍵欄位
+    originalUrl?: string; 
     status: string; 
     faces?: Face[];
     videoStatus?: 'PROCESSING' | 'COMPLETED' | 'FAILED' | null;
@@ -38,6 +38,8 @@ export default function PhotographerPage() {
   
   const [uploading, setUploading] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
+  
+  // 👁️ 檢視模式：預設為合成圖 (framed)
   const [viewMode, setViewMode] = useState<'framed' | 'original'>('framed');
   const [newGuest, setNewGuest] = useState({ name: '', phone: '', seat: '' });
 
@@ -65,11 +67,28 @@ export default function PhotographerPage() {
 
   const handleDirectDownload = (e: React.MouseEvent, photo: Photo) => { e.stopPropagation(); e.preventDefault(); window.location.href = `${BACKEND_URL}/photos/${photo.id}/download-proxy`; };
   const handleShare = async (e: React.MouseEvent, photo: Photo) => { e.stopPropagation(); e.preventDefault(); try { fetch(`${BACKEND_URL}/analytics/track`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ photoId: photo.id, type: 'SHARE' }) }); } catch (e) {} if (navigator.share) { navigator.share({ title: '活動照片', url: photo.url }).catch(console.error); } else { navigator.clipboard.writeText(photo.url); alert("連結已複製！"); } };
-  const handleGenerateVideo = async (e: React.MouseEvent, photo: Photo) => { e.stopPropagation(); e.preventDefault(); if (photo.videoStatus === 'PROCESSING') return; setPhotos(prev => prev.map(p => p.id === photo.id ? { ...p, videoStatus: 'PROCESSING' } : p)); try { const res = await fetch(`${BACKEND_URL}/photos/generate-video`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ photoId: photo.id }) }); if (!res.ok) throw new Error("API Error"); } catch (err) { alert("生成請求失敗，請稍後再試"); setPhotos(prev => prev.map(p => p.id === photo.id ? { ...p, videoStatus: null } : p)); } };
+  
+  const handleGenerateVideo = async (e: React.MouseEvent, photo: Photo) => { 
+      e.stopPropagation(); e.preventDefault(); 
+      if (photo.videoStatus === 'PROCESSING') return; 
+      
+      // UI 先顯示製作中
+      setPhotos(prev => prev.map(p => p.id === photo.id ? { ...p, videoStatus: 'PROCESSING' } : p)); 
+      
+      try { 
+          const res = await fetch(`${BACKEND_URL}/photos/generate-video`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ photoId: photo.id }) }); 
+          if (!res.ok) throw new Error("API Error"); 
+      } catch (err) { 
+          alert("生成請求失敗，請稍後再試"); 
+          // 失敗則還原
+          setPhotos(prev => prev.map(p => p.id === photo.id ? { ...p, videoStatus: null } : p)); 
+      } 
+  };
 
   const executeDeletePhoto = async () => { if (!deleteTargetId) return; try { const res = await fetch(`${BACKEND_URL}/photo/${deleteTargetId}`, { method: 'DELETE' }); if (res.ok) { setDeleteTargetId(null); } else { alert("刪除失敗"); } } catch (err) { alert('連線錯誤'); } };
   const handleDeleteGuest = async (id: number, name: string) => { if (!confirm(`確定要刪除賓客「${name}」嗎？`)) return; try { const res = await fetch(`${BACKEND_URL}/guest/${id}`, { method: 'DELETE' }); if (res.ok) setGuests(prev => prev.filter(g => g.id !== id)); } catch (err) { alert('連線錯誤'); } };
   const downloadTemplate = () => { const csvContent = "\uFEFFphone,name,seat\n85291234567,陳大文,Table 1"; const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }); const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = "template.csv"; link.click(); };
+  
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => { if (!e.target.files?.length) return; setUploading(true); const options = { maxSizeMB: 1, maxWidthOrHeight: 2048, useWebWorker: true, initialQuality: 0.8 }; for (let i = 0; i < e.target.files.length; i++) { const originalFile = e.target.files[i]; try { const compressedFile = await imageCompression(originalFile, options); const finalFile = new File([compressedFile], originalFile.name, { type: compressedFile.type, lastModified: Date.now() }); const formData = new FormData(); formData.append('photo', finalFile); await fetch(`${BACKEND_URL}/upload`, { method: 'POST', body: formData }); } catch (error) { const formData = new FormData(); formData.append('photo', originalFile); await fetch(`${BACKEND_URL}/upload`, { method: 'POST', body: formData }); } } setUploading(false); loadAllPhotos(); loadStats(); e.target.value = ''; };
   const handleAddGuest = async (e: React.FormEvent) => { e.preventDefault(); if (!newGuest.phone) return alert("電話是必填的"); try { await fetch(`${BACKEND_URL}/upsert-guest`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newGuest.name, phone: newGuest.phone, seatNumber: newGuest.seat }) }); setNewGuest({ name: '', phone: '', seat: '' }); loadAllGuests(); } catch (err) { alert("連線錯誤"); } };
   const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => { const file = e.target.files?.[0]; if (!file) return; Papa.parse(file, { header: true, skipEmptyLines: true, complete: async (results) => { const parsedData = results.data; if (parsedData.length === 0) return alert("CSV 是空的！"); const formattedGuests = parsedData.map((row: any) => ({ name: row.name || row.Name || row.姓名 || '', phone: row.phone || row.Phone || row.電話 || '', seatNumber: row.seat || row.Seat || row.座位 || '' })).filter((g: any) => g.phone); if (!confirm(`⚠️ 這將【清空】舊資料並匯入 ${formattedGuests.length} 筆新名單。確定嗎？`)) return; try { const res = await fetch(`${BACKEND_URL}/upsert-guests-bulk`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ guests: formattedGuests }) }); if (res.ok) { alert(`🎉 成功匯入！`); loadAllGuests(); } } catch (err) { alert(`上傳失敗`); } e.target.value = ''; } }); };
@@ -106,36 +125,69 @@ export default function PhotographerPage() {
             <div className="columns-2 md:columns-4 lg:columns-5 gap-4 space-y-4 mx-auto">
             {photos.map(photo => (
                 <div key={photo.id} className="break-inside-avoid group bg-slate-900 rounded-lg overflow-hidden border border-slate-800 mb-4 shadow-lg">
-                    <div className="relative w-full"> 
-                        {/* ⚠️ 核心修正：正確的圖片切換邏輯。如果 viewMode 是 original 且有 originalUrl，就顯示原圖，否則顯示合成圖 */}
-                        {photo.videoStatus === 'COMPLETED' && photo.videoUrl ? (
-                            <div className="relative">
-                                <video src={photo.videoUrl} controls className="w-full h-auto" poster={photo.url} />
-                                <div className="absolute top-2 left-2 bg-purple-600 text-white text-[10px] font-bold px-2 py-1 rounded-full shadow z-10">AI 影片</div>
-                            </div>
-                        ) : (
-                            <img 
-                                src={viewMode === 'original' && photo.originalUrl ? photo.originalUrl : photo.url} 
-                                className="w-full h-auto block" 
-                                loading="lazy" 
-                                alt={`Photo ${photo.id}`} 
-                            />
-                        )}
+                    
+                    {/* 1. 照片顯示區 */}
+                    <div className="relative w-full bg-black"> 
+                        {/* ⚠️ 修正：永遠顯示 Image，不受 Video 影響。確保 src 正確切換 */}
+                        <img 
+                            key={`${photo.id}-${viewMode}`} // 加上 Key 強制重新渲染，解決「殘影」問題
+                            src={viewMode === 'original' && photo.originalUrl ? photo.originalUrl : photo.url} 
+                            className="w-full h-auto block" 
+                            loading="lazy" 
+                            alt={`Photo ${photo.id}`} 
+                        />
                         
-                        {/* 🟩 綠色 AI 框框 */}
+                        {/* 2. 綠色 AI 框框 (只疊在圖上) */}
                         {photo.faces?.map((face, i) => (
                             <div key={i} style={{ position: 'absolute', left: `${face.boundingBox.x * 100}%`, top: `${face.boundingBox.y * 100}%`, width: `${face.boundingBox.width * 100}%`, height: `${face.boundingBox.height * 100}%`, border: '2px solid #00ff00', boxShadow: '0 0 5px #00ff00', pointerEvents: 'none' }}>
                                 {face.person && <div className="absolute -top-6 left-0 bg-green-600 text-white text-[10px] px-1 rounded whitespace-nowrap z-10">{face.person.name}</div>}
                             </div>
                         ))}
+                        
                         <button onClick={() => setDeleteTargetId(photo.id)} className="absolute top-2 right-2 p-2 bg-red-600 text-white rounded-full opacity-0 group-hover:opacity-100 transition z-20 shadow-lg">🗑️</button>
                     </div>
-                    
-                    <div className="flex items-center justify-between bg-slate-800 p-2 border-t border-slate-700">
-                        <button onClick={(e) => handleDirectDownload(e, photo)} className="p-2 text-slate-300 hover:text-white hover:bg-slate-700 rounded transition" title="下載">⬇️</button>
-                        <button onClick={(e) => handleShare(e, photo)} className="p-2 text-slate-300 hover:text-white hover:bg-slate-700 rounded transition" title="分享">🔗</button>
-                        <button onClick={(e) => handleGenerateVideo(e, photo)} disabled={photo.videoStatus === 'PROCESSING' || photo.videoStatus === 'COMPLETED'} className={`px-3 py-1 rounded text-xs font-bold transition flex items-center gap-1 ${photo.videoStatus === 'COMPLETED' ? 'bg-purple-900/50 text-purple-300 cursor-default' : photo.videoStatus === 'PROCESSING' ? 'bg-yellow-900/50 text-yellow-300 cursor-wait' : 'bg-purple-600 hover:bg-purple-500 text-white'}`}>
-                            {photo.videoStatus === 'COMPLETED' ? '✅ 已生成' : photo.videoStatus === 'PROCESSING' ? '⏳ 製作中' : '✨ 做影片'}
+
+                    {/* 3. 影片播放區 (移到照片下方) */}
+                    {photo.videoStatus === 'COMPLETED' && photo.videoUrl && (
+                        <div className="w-full bg-black border-t border-slate-800">
+                             <video 
+                                src={photo.videoUrl} 
+                                controls 
+                                className="w-full max-h-48 object-contain" 
+                                poster={photo.url} // 影片封面固定用合成圖
+                             />
+                             <div className="bg-purple-900/30 text-purple-300 text-[10px] text-center py-1">✨ AI 擁抱影片已生成</div>
+                        </div>
+                    )}
+
+                    {/* 4. 按鈕區 (改回文字+Icon樣式) */}
+                    <div className="flex items-center justify-between bg-slate-800 border-t border-slate-700 divide-x divide-slate-700">
+                        <button 
+                            onClick={(e) => handleDirectDownload(e, photo)} 
+                            className="flex-1 py-3 text-slate-300 hover:text-white hover:bg-slate-700 transition flex items-center justify-center gap-1 text-xs font-bold"
+                        >
+                            ⬇️ 下載
+                        </button>
+                        
+                        <button 
+                            onClick={(e) => handleShare(e, photo)} 
+                            className="flex-1 py-3 text-slate-300 hover:text-white hover:bg-slate-700 transition flex items-center justify-center gap-1 text-xs font-bold"
+                        >
+                            🔗 分享
+                        </button>
+
+                        <button 
+                            onClick={(e) => handleGenerateVideo(e, photo)} 
+                            disabled={photo.videoStatus === 'PROCESSING' || photo.videoStatus === 'COMPLETED'}
+                            className={`flex-1 py-3 transition flex items-center justify-center gap-1 text-xs font-bold
+                                ${photo.videoStatus === 'COMPLETED' ? 'bg-slate-800 text-purple-400 cursor-default' : 
+                                  photo.videoStatus === 'PROCESSING' ? 'bg-slate-800 text-yellow-400 cursor-wait' : 
+                                  'bg-slate-800 hover:bg-purple-900/50 text-purple-300'}
+                            `}
+                        >
+                            {photo.videoStatus === 'COMPLETED' ? '✅ 完成' : 
+                             photo.videoStatus === 'PROCESSING' ? '⏳ 製作中' : 
+                             '✨ 做影片'}
                         </button>
                     </div>
                 </div>
